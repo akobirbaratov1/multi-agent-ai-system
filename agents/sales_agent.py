@@ -117,6 +117,17 @@ def sales_agent(state: AgentState) -> AgentState:
         )
         crm_actions.append("Demo request logged")
 
+        # Schedule a 24h follow-up
+        from tools.followup import schedule_followup
+        schedule_followup(
+            lead_id=lead_id or state["user_id"],
+            user_id=state["user_id"],
+            email=None,
+            reason="demo_requested",
+            delay_hours=24,
+        )
+        crm_actions.append("Follow-up scheduled: 24h")
+
     return {
         **state,
         "agent_response": result["response"],

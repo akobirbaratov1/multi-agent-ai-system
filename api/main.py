@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import uvicorn
 
-from api.routes import chat_router, knowledge_router, crm_router, monitoring_router
+from api.routes import chat_router, knowledge_router, crm_router, monitoring_router, operator_router
 from api.schemas import HealthResponse
 from memory.vector_store import FAISSVectorStore
 from tools.crm import MockCRM
@@ -36,6 +36,7 @@ app.include_router(chat_router)
 app.include_router(knowledge_router)
 app.include_router(crm_router)
 app.include_router(monitoring_router)
+app.include_router(operator_router)
 
 _vector_store = FAISSVectorStore()
 _crm = MockCRM()

@@ -52,13 +52,27 @@ def reject_message(state: AgentState) -> AgentState:
 
 
 def human_review_node(state: AgentState) -> AgentState:
-    """Human-in-the-loop — low confidence cases"""
+    """Human-in-the-loop — low confidence cases stored for operator review."""
+    from api.routes.operator import add_pending_case
+
+    try:
+        add_pending_case(
+            session_id=state.get("session_id", ""),
+            user_id=state.get("user_id", ""),
+            user_message=state.get("user_message", ""),
+            agent_response=state.get("agent_response") or "",
+            intent=str(state.get("intent", "unknown")),
+            confidence=state.get("intent_confidence", 0.0),
+            trace_id=state.get("trace_id", ""),
+        )
+    except Exception:
+        pass
 
     return {
         **state,
         "final_response": (
             "I'm not fully confident in my response. "
-            "A human agent will review and respond shortly. "
+            "A human operator will review and respond shortly. "
             f"Your session ID: {state.get('session_id')}"
         ),
         "requires_human": True,

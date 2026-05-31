@@ -2,7 +2,7 @@
 
 > Built with LangGraph • Claude API • FAISS • FastAPI • Web UI
 
-![Tests](https://github.com/yourusername/multi-agent-ai-system/actions/workflows/tests.yml/badge.svg)
+![Tests](https://github.com/akobirbaratov1/multi-agent-ai-system/actions/workflows/tests.yml/badge.svg)
 ![Python](https://img.shields.io/badge/Python-3.11+-blue)
 ![LangGraph](https://img.shields.io/badge/LangGraph-Latest-green)
 ![Claude](https://img.shields.io/badge/Claude-Sonnet_4.6-orange)
@@ -61,12 +61,15 @@ User (Web / API)
 - **Multi-Agent Orchestration** — LangGraph state machine with conditional routing
 - **3 Specialized Agents** — Sales, Support, Research
 - **RAG System** — FAISS IndexFlatIP + cosine similarity document retrieval
-- **Human-in-the-Loop** — confidence scoring with auto/manual routing
-- **Mock CRM** — HubSpot-compatible lead management and activity logging
+- **Human-in-the-Loop** — Operator Dashboard with approve/reject/override UI
+- **Telegram Bot** — full bot interface via the same orchestrator pipeline
+- **Mock CRM** — HubSpot-compatible lead management, activity logging, follow-ups
 - **Email Dispatch** — template-based email mock (SendGrid-compatible structure)
-- **Web UI** — real-time dark-themed chat interface
+- **Follow-up System** — scheduled 24h follow-ups on demo requests
+- **Web UI** — real-time dark-themed chat + Operator Dashboard
 - **REST API** — FastAPI with full OpenAPI docs at `/docs`
 - **Monitoring** — LangSmith traces + custom metrics + human feedback
+- **Feedback Loop** — performance analysis, improvement suggestions, weekly reports
 - **Automated Evaluation** — test datasets + accuracy scoring
 - **Docker Ready** — single-command deployment
 
@@ -106,7 +109,10 @@ multi-agent-ai-system/
 ├── tools/
 │   ├── crm.py                # Mock CRM (HubSpot-compatible)
 │   ├── email.py              # Email dispatch (mock SMTP)
-│   └── search.py             # Knowledge base search utilities
+│   ├── search.py             # Knowledge base search utilities
+│   └── followup.py           # Scheduled follow-up queue
+├── telegram_bot/
+│   └── bot.py                # Telegram bot (polling mode)
 ├── api/
 │   ├── main.py               # FastAPI app entry point
 │   ├── schemas.py            # Pydantic request/response models
@@ -114,10 +120,15 @@ multi-agent-ai-system/
 │       ├── chat.py           # POST /chat
 │       ├── knowledge.py      # /knowledge/*
 │       ├── crm.py            # /crm/*
+│       ├── operator.py       # /operator/* (Human-in-the-Loop)
 │       └── monitoring.py     # /monitoring/*
 ├── monitoring/
 │   ├── langsmith.py          # LangSmith integration (graceful fallback)
 │   └── metrics.py            # Custom latency & usage metrics
+├── feedback_loop/
+│   ├── analyzer.py           # Performance & log analysis
+│   ├── improver.py           # Prompt improvement suggestions
+│   └── reporter.py           # Weekly performance reports
 ├── evaluation/
 │   ├── auto_eval.py          # Automated accuracy evaluation
 │   ├── feedback.py           # Human feedback collection
@@ -128,7 +139,8 @@ multi-agent-ai-system/
 │   ├── test_api.py           # API integration tests
 │   └── test_rag.py           # Vector store & RAG tests
 ├── web/
-│   └── index.html            # Web UI (dark theme, real-time chat)
+│   ├── index.html            # Web UI (dark theme, real-time chat)
+│   └── operator.html         # Operator Dashboard (Human-in-the-Loop)
 ├── docker/
 │   ├── Dockerfile
 │   └── docker-compose.yml
@@ -165,7 +177,7 @@ DEMO_MODE=true uvicorn api.main:app --reload
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/yourusername/multi-agent-ai-system.git
+git clone https://github.com/akobirbaratov1/multi-agent-ai-system.git
 cd multi-agent-ai-system
 pip install -r requirements.txt
 ```
@@ -212,9 +224,18 @@ pytest tests/ -v
 | GET | `/knowledge/init` | Load sample KB |
 | GET | `/crm/stats` | CRM dashboard |
 | GET | `/crm/leads` | List all leads |
+| GET | `/crm/activities` | CRM activity log |
+| GET | `/operator` | Operator Dashboard UI |
+| GET | `/operator/cases` | List human-review cases |
+| POST | `/operator/cases/{id}/review` | Approve / reject / override |
+| GET | `/operator/stats` | Human-in-the-Loop stats |
 | GET | `/monitoring/metrics` | Latency & usage metrics |
 | POST | `/monitoring/feedback` | Submit response rating |
 | GET | `/monitoring/tracing` | LangSmith trace status |
+| GET | `/monitoring/analysis` | Performance analysis (7-day) |
+| GET | `/monitoring/improvements` | AI-generated improvement suggestions |
+| GET | `/monitoring/report` | Full weekly performance report |
+| GET | `/monitoring/followups` | Follow-up queue stats |
 
 Full OpenAPI spec available at `/docs`.
 
@@ -238,6 +259,53 @@ Full OpenAPI spec available at `/docs`.
 - RAG document synthesis (top-5 KB articles)
 - Multi-source information analysis
 - Structured report generation with citations
+
+---
+
+## Telegram Bot
+
+The same orchestrator pipeline is available via Telegram.
+
+```bash
+# Add to .env:
+TELEGRAM_BOT_TOKEN=your_token_from_BotFather
+
+# Run bot:
+python -m telegram_bot.bot
+```
+
+Commands: `/start`, `/help`, `/clear`
+
+---
+
+## Operator Dashboard
+
+Human-in-the-Loop review interface at `/operator`.
+
+Operators can:
+- View all low-confidence cases escalated by the system
+- **Approve** — accept the agent's response as-is
+- **Reject** — discard and flag for retraining
+- **Override** — replace the agent's response with a custom one
+
+Dashboard auto-refreshes every 15 seconds.
+
+---
+
+## Feedback Loop
+
+Automated weekly analysis pipeline:
+
+```bash
+# Via API:
+GET /monitoring/analysis      # 7-day performance breakdown
+GET /monitoring/improvements  # Claude-generated prompt suggestions
+GET /monitoring/report        # Full executive summary
+
+# Via Python:
+from feedback_loop.reporter import generate_weekly_report, print_report
+print_report(generate_weekly_report())
+```
 
 ---
 
@@ -267,7 +335,7 @@ LANGSMITH_PROJECT=multi-agent-ai-system
 ## Author
 
 **Botirjon Akramov** — Senior Agentic AI Engineer  
-[LinkedIn](https://linkedin.com/in/yourprofile) • [GitHub](https://github.com/yourusername)
+[LinkedIn](https://linkedin.com/in/yourprofile) • [GitHub](https://github.com/akobirbaratov1)
 
 > *"I don't just write code. I architect systems that run."*
 

@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Operator Dashboard — Multi-Agent AI</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0a0a0f; color: #e2e8f0; min-height: 100vh; }
+
+        header {
+            padding: 16px 24px;
+            background: #111118;
+            border-bottom: 1px solid #1e1e2e;
+            display: flex; align-items: center; gap: 12px;
+        }
+        .logo { width: 36px; height: 36px; background: linear-gradient(135deg, #ef4444, #f97316); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+        h1 { font-size: 18px; font-weight: 600; }
+        h1 span { color: #ef4444; }
+        .nav-link { margin-left: auto; color: #6366f1; font-size: 13px; text-decoration: none; }
+        .nav-link:hover { text-decoration: underline; }
+
+        .stats-bar {
+            display: flex; gap: 16px; padding: 16px 24px;
+            background: #111118; border-bottom: 1px solid #1e1e2e;
+        }
+        .stat-card {
+            background: #1a1a2e; border: 1px solid #1e1e3e; border-radius: 8px;
+            padding: 12px 20px; text-align: center; min-width: 100px;
+        }
+        .stat-number { font-size: 24px; font-weight: 700; color: #6366f1; }
+        .stat-number.red { color: #ef4444; }
+        .stat-number.green { color: #22c55e; }
+        .stat-label { font-size: 11px; color: #64748b; margin-top: 2px; text-transform: uppercase; letter-spacing: 1px; }
+
+        .toolbar {
+            padding: 12px 24px; display: flex; gap: 12px; align-items: center;
+            border-bottom: 1px solid #1e1e2e;
+        }
+        .filter-btn {
+            background: #1a1a2e; border: 1px solid #1e1e3e; border-radius: 6px;
+            padding: 6px 14px; font-size: 12px; color: #94a3b8; cursor: pointer;
+            transition: all 0.2s;
+        }
+        .filter-btn.active { border-color: #6366f1; color: #6366f1; background: #1e1e3e; }
+        .filter-btn:hover { border-color: #6366f1; }
+        .refresh-btn {
+            margin-left: auto; background: #6366f1; border: none; border-radius: 6px;
+            padding: 6px 14px; font-size: 12px; color: white; cursor: pointer;
+        }
+        .refresh-btn:hover { background: #4f46e5; }
+
+        .cases-list { padding: 24px; display: flex; flex-direction: column; gap: 12px; }
+
+        .case-card {
+            background: #111118; border: 1px solid #1e1e2e; border-radius: 12px;
+            padding: 16px 20px; transition: border-color 0.2s;
+        }
+        .case-card.pending { border-left: 3px solid #f59e0b; }
+        .case-card.resolved { border-left: 3px solid #22c55e; opacity: 0.7; }
+
+        .case-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+        .case-id { font-size: 11px; color: #475569; font-family: monospace; }
+        .case-badge {
+            font-size: 10px; padding: 2px 8px; border-radius: 4px; font-weight: 600;
+        }
+        .badge-pending { background: #451a03; color: #f59e0b; }
+        .badge-resolved { background: #052e16; color: #22c55e; }
+        .badge-intent { background: #1e1b4b; color: #818cf8; }
+        .case-time { margin-left: auto; font-size: 11px; color: #475569; }
+
+        .case-body { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+        .case-section label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #475569; display: block; margin-bottom: 4px; }
+        .case-text {
+            background: #1a1a2e; border: 1px solid #1e1e3e; border-radius: 6px;
+            padding: 10px 12px; font-size: 13px; line-height: 1.5; color: #cbd5e1;
+            min-height: 60px;
+        }
+
+        .confidence-bar { height: 4px; background: #1e1e2e; border-radius: 2px; margin-top: 6px; }
+        .confidence-fill { height: 100%; border-radius: 2px; background: #ef4444; transition: width 0.3s; }
+
+        .case-actions { display: flex; gap: 8px; align-items: center; }
+        .action-btn {
+            border: none; border-radius: 6px; padding: 7px 16px; font-size: 12px;
+            font-weight: 600; cursor: pointer; transition: all 0.2s;
+        }
+        .btn-approve { background: #064e3b; color: #34d399; }
+        .btn-approve:hover { background: #065f46; }
+        .btn-reject { background: #450a0a; color: #f87171; }
+        .btn-reject:hover { background: #5a0a0a; }
+        .btn-override { background: #1e1b4b; color: #818cf8; }
+        .btn-override:hover { background: #2d2a6e; }
+
+        .override-input {
+            display: none; flex: 1; background: #1a1a2e; border: 1px solid #4f46e5;
+            border-radius: 6px; padding: 7px 12px; font-size: 12px; color: #e2e8f0;
+        }
+        .override-input:focus { outline: none; }
+        .btn-send { background: #4f46e5; color: white; border: none; border-radius: 6px; padding: 7px 12px; font-size: 12px; cursor: pointer; display: none; }
+
+        .resolved-note { font-size: 12px; color: #22c55e; padding: 4px 0; }
+
+        .empty-state { text-align: center; padding: 60px; color: #475569; }
+        .empty-state h3 { font-size: 18px; color: #64748b; margin-bottom: 8px; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        .case-card { animation: fadeIn 0.3s ease; }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo">🛡️</div>
+        <h1>Operator <span>Dashboard</span></h1>
+        <a href="/" class="nav-link">← Back to Chat</a>
+    </header>
+
+    <div class="stats-bar">
+        <div class="stat-card">
+            <div class="stat-number" id="stat-total">—</div>
+            <div class="stat-label">Total Cases</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number red" id="stat-pending">—</div>
+            <div class="stat-label">Pending</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number green" id="stat-resolved">—</div>
+            <div class="stat-label">Resolved</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="stat-conf">—</div>
+            <div class="stat-label">Avg Confidence</div>
+        </div>
+    </div>
+
+    <div class="toolbar">
+        <button class="filter-btn active" onclick="setFilter('all')">All</button>
+        <button class="filter-btn" onclick="setFilter('pending')">Pending</button>
+        <button class="filter-btn" onclick="setFilter('resolved')">Resolved</button>
+        <button class="refresh-btn" onclick="loadCases()">↻ Refresh</button>
+    </div>
+
+    <div class="cases-list" id="cases-list">
+        <div class="empty-state">
+            <h3>Loading cases...</h3>
+        </div>
+    </div>
+
+    <script>
+        let currentFilter = 'all';
+        let allCases = [];
+
+        function setFilter(f) {
+            currentFilter = f;
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            event.target.classList.add('active');
+            renderCases();
+        }
+
+        function timeAgo(iso) {
+            const diff = Date.now() - new Date(iso).getTime();
+            const mins = Math.floor(diff / 60000);
+            if (mins < 1) return 'just now';
+            if (mins < 60) return `${mins}m ago`;
+            return `${Math.floor(mins / 60)}h ago`;
+        }
+
+        function renderCases() {
+            const list = document.getElementById('cases-list');
+            const filtered = currentFilter === 'all'
+                ? allCases
+                : allCases.filter(c => c.status === currentFilter);
+
+            if (!filtered.length) {
+                list.innerHTML = `<div class="empty-state"><h3>✅ No ${currentFilter === 'all' ? '' : currentFilter + ' '}cases</h3><p>All clear!</p></div>`;
+                return;
+            }
+
+            list.innerHTML = filtered.map(c => `
+                <div class="case-card ${c.status}" id="card-${c.id}">
+                    <div class="case-header">
+                        <span class="case-id">#${c.id.slice(0,8)}</span>
+                        <span class="case-badge badge-${c.status}">${c.status.toUpperCase()}</span>
+                        <span class="case-badge badge-intent">${c.intent}</span>
+                        <span class="case-time">${timeAgo(c.created_at)}</span>
+                    </div>
+
+                    <div class="case-body">
+                        <div class="case-section">
+                            <label>User Message</label>
+                            <div class="case-text">${escHtml(c.user_message)}</div>
+                        </div>
+                        <div class="case-section">
+                            <label>Agent Response (low confidence)</label>
+                            <div class="case-text">${escHtml(c.agent_response || 'No response generated')}</div>
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom:12px">
+                        <label style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#475569">
+                            Confidence: ${(c.confidence * 100).toFixed(0)}%
+                        </label>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" style="width:${c.confidence * 100}%"></div>
+                        </div>
+                    </div>
+
+                    ${c.status === 'pending' ? `
+                    <div class="case-actions">
+                        <button class="action-btn btn-approve" onclick="decide('${c.id}', 'approve')">✓ Approve</button>
+                        <button class="action-btn btn-reject" onclick="decide('${c.id}', 'reject')">✗ Reject</button>
+                        <button class="action-btn btn-override" onclick="toggleOverride('${c.id}')">✎ Override</button>
+                        <input class="override-input" id="override-${c.id}" placeholder="Type your response override..."/>
+                        <button class="btn-send" id="send-${c.id}" onclick="decide('${c.id}', 'override')">Send</button>
+                    </div>
+                    ` : `
+                    <div class="resolved-note">
+                        ✓ ${c.decision?.toUpperCase()} — ${c.operator_response || 'No override'}
+                        ${c.resolved_at ? `<span style="color:#475569"> · ${timeAgo(c.resolved_at)}</span>` : ''}
+                    </div>
+                    `}
+                </div>
+            `).join('');
+        }
+
+        function escHtml(str) {
+            return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+
+        function toggleOverride(id) {
+            const inp = document.getElementById(`override-${id}`);
+            const btn = document.getElementById(`send-${id}`);
+            const show = inp.style.display !== 'flex';
+            inp.style.display = show ? 'flex' : 'none';
+            btn.style.display = show ? 'block' : 'none';
+            if (show) inp.focus();
+        }
+
+        async function decide(id, decision) {
+            const overrideInput = document.getElementById(`override-${id}`);
+            const operatorResponse = overrideInput ? overrideInput.value.trim() : null;
+
+            const res = await fetch(`/operator/cases/${id}/review`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ decision, operator_response: operatorResponse || null }),
+            });
+
+            if (res.ok) loadCases();
+            else alert('Error resolving case');
+        }
+
+        async function loadCases() {
+            try {
+                const [casesRes, statsRes] = await Promise.all([
+                    fetch('/operator/cases'),
+                    fetch('/operator/stats'),
+                ]);
+                const { cases } = await casesRes.json();
+                const stats = await statsRes.json();
+
+                allCases = cases;
+                document.getElementById('stat-total').textContent = stats.total_cases;
+                document.getElementById('stat-pending').textContent = stats.pending;
+                document.getElementById('stat-resolved').textContent = stats.resolved;
+                document.getElementById('stat-conf').textContent =
+                    (stats.avg_confidence_at_escalation * 100).toFixed(0) + '%';
+
+                renderCases();
+            } catch (e) {
+                document.getElementById('cases-list').innerHTML =
+                    '<div class="empty-state"><h3>⚠️ Could not connect to API</h3></div>';
+            }
+        }
+
+        loadCases();
+        setInterval(loadCases, 15000);
+    </script>
+</body>
+</html>
