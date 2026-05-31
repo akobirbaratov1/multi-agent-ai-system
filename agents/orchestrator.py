@@ -8,9 +8,32 @@ import time
 from langgraph.graph import StateGraph, END
 from core.state import AgentState, IntentType
 from core.router import classify_intent, route_to_agent
+from core.security import security_check, sanitize_input
 from agents.sales_agent import sales_agent
 from agents.support_agent import support_agent
 from agents.research_agent import research_agent
+
+
+def security_check_node(state: AgentState) -> AgentState:
+    """Security Check — rate limiting, injection detection, sanitization."""
+    raw_message = state.get("user_message", "")
+    clean_message = sanitize_input(raw_message)
+
+    passed, reason = security_check(
+        user_id=state.get("user_id", "anonymous"),
+        message=clean_message,
+    )
+
+    if not passed:
+        return {
+            **state,
+            "user_message": clean_message,
+            "is_valid": False,
+            "is_spam": False,
+            "validation_reason": f"Security: {reason}",
+        }
+
+    return {**state, "user_message": clean_message}
 
 
 def validate_input(state: AgentState) -> AgentState:
@@ -18,7 +41,6 @@ def validate_input(state: AgentState) -> AgentState:
 
     message = state.get("user_message", "").strip()
 
-    # Basic validation
     if not message or len(message) < 2:
         return {**state, "is_valid": False, "is_spam": False,
                 "validation_reason": "Message too short"}
@@ -27,7 +49,6 @@ def validate_input(state: AgentState) -> AgentState:
         return {**state, "is_valid": False, "is_spam": False,
                 "validation_reason": "Message too long"}
 
-    # Simple spam detection
     spam_patterns = ["buy now!!!", "click here!!!", "free money"]
     is_spam = any(pattern in message.lower() for pattern in spam_patterns)
 
@@ -87,12 +108,20 @@ def should_continue(state: AgentState) -> str:
     return "classify"
 
 
+def after_security(state: AgentState) -> str:
+    """Conditional edge after security check."""
+    if not state.get("is_valid") and state.get("validation_reason", "").startswith("Security:"):
+        return "reject"
+    return "validate"
+
+
 def build_graph() -> StateGraph:
     """Build the LangGraph workflow"""
 
     workflow = StateGraph(AgentState)
 
     # Add nodes
+    workflow.add_node("security", security_check_node)
     workflow.add_node("validate", validate_input)
     workflow.add_node("classify", classify_intent)
     workflow.add_node("sales_agent", sales_agent)
@@ -101,8 +130,15 @@ def build_graph() -> StateGraph:
     workflow.add_node("human_review", human_review_node)
     workflow.add_node("reject", reject_message)
 
-    # Entry point
-    workflow.set_entry_point("validate")
+    # Entry point — security first
+    workflow.set_entry_point("security")
+
+    # Security → validate or reject
+    workflow.add_conditional_edges(
+        "security",
+        after_security,
+        {"reject": "reject", "validate": "validate"},
+    )
 
     # Edges
     workflow.add_conditional_edges(

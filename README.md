@@ -59,6 +59,7 @@ User (Web / API)
 ## Features
 
 - **Multi-Agent Orchestration** — LangGraph state machine with conditional routing
+- **Security Check** — rate limiting, prompt injection detection, input sanitization
 - **3 Specialized Agents** — Sales, Support, Research
 - **RAG System** — FAISS IndexFlatIP + cosine similarity document retrieval
 - **Human-in-the-Loop** — Operator Dashboard with approve/reject/override UI
@@ -101,7 +102,8 @@ multi-agent-ai-system/
 ├── core/
 │   ├── state.py              # AgentState TypedDict schema
 │   ├── router.py             # Intent classification & routing
-│   └── confidence.py         # Confidence scoring utilities
+│   ├── confidence.py         # Confidence scoring utilities
+│   └── security.py           # Rate limiting & injection detection
 ├── memory/
 │   ├── vector_store.py       # FAISS vector store
 │   ├── knowledge_base.py     # Document ingestion & management
@@ -111,6 +113,8 @@ multi-agent-ai-system/
 │   ├── email.py              # Email dispatch (mock SMTP)
 │   ├── search.py             # Knowledge base search utilities
 │   └── followup.py           # Scheduled follow-up queue
+├── integrations/
+│   └── twochat.py            # 2Chat WhatsApp/SMS integration
 ├── telegram_bot/
 │   └── bot.py                # Telegram bot (polling mode)
 ├── api/
@@ -121,6 +125,7 @@ multi-agent-ai-system/
 │       ├── knowledge.py      # /knowledge/*
 │       ├── crm.py            # /crm/*
 │       ├── operator.py       # /operator/* (Human-in-the-Loop)
+│       ├── webhooks.py       # /webhook/2chat, /webhook/...
 │       └── monitoring.py     # /monitoring/*
 ├── monitoring/
 │   ├── langsmith.py          # LangSmith integration (graceful fallback)
@@ -236,6 +241,9 @@ pytest tests/ -v
 | GET | `/monitoring/improvements` | AI-generated improvement suggestions |
 | GET | `/monitoring/report` | Full weekly performance report |
 | GET | `/monitoring/followups` | Follow-up queue stats |
+| POST | `/webhook/2chat` | 2Chat incoming message webhook |
+| GET | `/webhook/2chat/status` | 2Chat configuration status |
+| GET | `/webhook/2chat/test` | Test 2Chat pipeline (no real API call) |
 
 Full OpenAPI spec available at `/docs`.
 
