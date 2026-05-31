@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Agent AI System</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #0a0a0f;
+            color: #e2e8f0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            padding: 16px 24px;
+            background: #111118;
+            border-bottom: 1px solid #1e1e2e;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo {
+            width: 36px; height: 36px;
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px;
+        }
+
+        h1 { font-size: 18px; font-weight: 600; }
+        h1 span { color: #6366f1; }
+
+        .status-bar {
+            margin-left: auto;
+            display: flex;
+            gap: 16px;
+            font-size: 12px;
+            color: #64748b;
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 6px; height: 6px;
+            background: #22c55e;
+            border-radius: 50%;
+            margin-right: 4px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .main {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .sidebar {
+            width: 260px;
+            background: #111118;
+            border-right: 1px solid #1e1e2e;
+            padding: 16px;
+            overflow-y: auto;
+        }
+
+        .sidebar h3 {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #475569;
+            margin-bottom: 12px;
+        }
+
+        .agent-card {
+            background: #1a1a2e;
+            border: 1px solid #1e1e3e;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .agent-card:hover { border-color: #6366f1; }
+        .agent-card.active { border-color: #6366f1; background: #1e1e3e; }
+
+        .agent-name {
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .agent-desc { font-size: 11px; color: #64748b; }
+
+        .stats-section { margin-top: 20px; }
+
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            padding: 6px 0;
+            border-bottom: 1px solid #1e1e2e;
+            color: #94a3b8;
+        }
+
+        .stat-value { color: #6366f1; font-weight: 600; }
+
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .message {
+            display: flex;
+            gap: 12px;
+            max-width: 80%;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user { margin-left: auto; flex-direction: row-reverse; }
+
+        .avatar {
+            width: 32px; height: 32px;
+            border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .message.user .avatar { background: #6366f1; }
+        .message.ai .avatar { background: #1e293b; border: 1px solid #334155; }
+
+        .bubble {
+            background: #1a1a2e;
+            border: 1px solid #1e1e3e;
+            border-radius: 12px;
+            padding: 12px 16px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .message.user .bubble {
+            background: #312e81;
+            border-color: #4338ca;
+        }
+
+        .meta {
+            margin-top: 6px;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .badge {
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+
+        .badge.sales { background: #064e3b; color: #34d399; }
+        .badge.support { background: #1e3a5f; color: #60a5fa; }
+        .badge.research { background: #4a1942; color: #c084fc; }
+        .badge.rag { background: #292524; color: #fb923c; }
+        .badge.latency { background: #1e1b4b; color: #818cf8; }
+
+        .input-area {
+            padding: 16px 24px;
+            background: #111118;
+            border-top: 1px solid #1e1e2e;
+            display: flex;
+            gap: 12px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            background: #1a1a2e;
+            border: 1px solid #1e1e3e;
+            border-radius: 10px;
+            padding: 12px 16px;
+            font-size: 14px;
+            color: #e2e8f0;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        input[type="text"]:focus { border-color: #6366f1; }
+        input[type="text"]::placeholder { color: #475569; }
+
+        button {
+            background: #6366f1;
+            border: none;
+            border-radius: 10px;
+            padding: 12px 20px;
+            color: white;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:hover { background: #4f46e5; }
+        button:disabled { background: #334155; cursor: not-allowed; }
+
+        .typing {
+            display: flex;
+            gap: 4px;
+            padding: 12px 16px;
+            background: #1a1a2e;
+            border: 1px solid #1e1e3e;
+            border-radius: 12px;
+            width: fit-content;
+        }
+
+        .typing span {
+            width: 6px; height: 6px;
+            background: #6366f1;
+            border-radius: 50%;
+            animation: bounce 1s infinite;
+        }
+
+        .typing span:nth-child(2) { animation-delay: 0.15s; }
+        .typing span:nth-child(3) { animation-delay: 0.3s; }
+
+        @keyframes bounce {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-6px); }
+        }
+
+        .welcome {
+            text-align: center;
+            padding: 60px 20px;
+            color: #475569;
+        }
+
+        .welcome h2 { font-size: 24px; color: #94a3b8; margin-bottom: 8px; }
+        .welcome p { font-size: 14px; margin-bottom: 24px; }
+
+        .quick-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            justify-content: center;
+        }
+
+        .quick-btn {
+            background: #1a1a2e;
+            border: 1px solid #1e1e3e;
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 13px;
+            color: #94a3b8;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .quick-btn:hover { border-color: #6366f1; color: #6366f1; background: #1e1e3e; }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo">🤖</div>
+        <h1>Multi-Agent <span>AI System</span></h1>
+        <div class="status-bar">
+            <span><span class="status-dot"></span>System Online</span>
+            <span id="agent-indicator">Ready</span>
+        </div>
+    </header>
+
+    <div class="main">
+        <div class="sidebar">
+            <h3>Agents</h3>
+
+            <div class="agent-card" id="card-sales">
+                <div class="agent-name">🎯 Sales Agent</div>
+                <div class="agent-desc">Lead qualification & conversion</div>
+            </div>
+
+            <div class="agent-card" id="card-support">
+                <div class="agent-name">🛟 Support Agent</div>
+                <div class="agent-desc">FAQ & problem solving via RAG</div>
+            </div>
+
+            <div class="agent-card" id="card-research">
+                <div class="agent-name">🔍 Research Agent</div>
+                <div class="agent-desc">Information retrieval & analysis</div>
+            </div>
+
+            <div class="stats-section">
+                <h3>Session Stats</h3>
+                <div class="stat-item">
+                    <span>Messages</span>
+                    <span class="stat-value" id="stat-messages">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>RAG Used</span>
+                    <span class="stat-value" id="stat-rag">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Avg Latency</span>
+                    <span class="stat-value" id="stat-latency">-</span>
+                </div>
+                <div class="stat-item">
+                    <span>CRM Actions</span>
+                    <span class="stat-value" id="stat-crm">0</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-area">
+            <div class="messages" id="messages">
+                <div class="welcome">
+                    <h2>🤖 Multi-Agent AI System</h2>
+                    <p>Powered by LangGraph • Claude • FAISS RAG</p>
+                    <div class="quick-actions">
+                        <button class="quick-btn" onclick="sendQuick('I want to learn about your pricing plans')">💰 Pricing</button>
+                        <button class="quick-btn" onclick="sendQuick('I need help with API integration')">🔧 API Help</button>
+                        <button class="quick-btn" onclick="sendQuick('Tell me about multi-agent AI systems')">🔍 Research</button>
+                        <button class="quick-btn" onclick="sendQuick('I want to schedule a demo')">📅 Demo</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="input-area">
+                <input type="text" id="input" placeholder="Ask anything — Sales, Support, or Research..." />
+                <button id="send-btn" onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const userId = 'user_' + Math.random().toString(36).substr(2, 9);
+        let sessionId = null;
+        let history = [];
+        let stats = { messages: 0, rag: 0, latencies: [], crm: 0 };
+
+        document.getElementById('input').addEventListener('keypress', e => {
+            if (e.key === 'Enter') sendMessage();
+        });
+
+        function sendQuick(text) {
+            document.getElementById('input').value = text;
+            sendMessage();
+        }
+
+        function addMessage(role, content, meta = null) {
+            const container = document.getElementById('messages');
+
+            // Remove welcome screen
+            const welcome = container.querySelector('.welcome');
+            if (welcome) welcome.remove();
+
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+
+            const emoji = role === 'user' ? '👤' : '🤖';
+            let metaHtml = '';
+
+            if (meta && role === 'ai') {
+                const agentBadge = meta.agent ? `<span class="badge ${meta.agent}">${meta.agent}</span>` : '';
+                const ragBadge = meta.rag_used ? `<span class="badge rag">RAG</span>` : '';
+                const latencyBadge = `<span class="badge latency">${meta.latency_ms}ms</span>`;
+                metaHtml = `<div class="meta">${agentBadge}${ragBadge}${latencyBadge}</div>`;
+            }
+
+            div.innerHTML = `
+                <div class="avatar">${emoji}</div>
+                <div>
+                    <div class="bubble">${content}</div>
+                    ${metaHtml}
+                </div>
+            `;
+
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function showTyping() {
+            const container = document.getElementById('messages');
+            const div = document.createElement('div');
+            div.className = 'message ai';
+            div.id = 'typing-indicator';
+            div.innerHTML = `
+                <div class="avatar">🤖</div>
+                <div class="typing"><span></span><span></span><span></span></div>
+            `;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function removeTyping() {
+            const el = document.getElementById('typing-indicator');
+            if (el) el.remove();
+        }
+
+        function updateAgentCard(agent) {
+            document.querySelectorAll('.agent-card').forEach(c => c.classList.remove('active'));
+            const card = document.getElementById(`card-${agent}`);
+            if (card) card.classList.add('active');
+            document.getElementById('agent-indicator').textContent = `${agent} agent`;
+        }
+
+        function updateStats(meta) {
+            stats.messages++;
+            if (meta.rag_used) stats.rag++;
+            if (meta.crm_actions?.length) stats.crm += meta.crm_actions.length;
+            stats.latencies.push(meta.latency_ms);
+
+            const avgLatency = Math.round(stats.latencies.reduce((a,b) => a+b, 0) / stats.latencies.length);
+
+            document.getElementById('stat-messages').textContent = stats.messages;
+            document.getElementById('stat-rag').textContent = stats.rag;
+            document.getElementById('stat-latency').textContent = avgLatency + 'ms';
+            document.getElementById('stat-crm').textContent = stats.crm;
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('input');
+            const message = input.value.trim();
+            if (!message) return;
+
+            input.value = '';
+            document.getElementById('send-btn').disabled = true;
+
+            addMessage('user', message);
+
+            history.push({ role: 'user', content: message });
+
+            showTyping();
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        message: message,
+                        session_id: sessionId,
+                        interface: 'web',
+                        conversation_history: history.slice(-10),
+                    })
+                });
+
+                const data = await response.json();
+                sessionId = data.session_id;
+
+                removeTyping();
+                addMessage('ai', data.response, data);
+
+                history.push({ role: 'assistant', content: data.response });
+
+                updateAgentCard(data.agent);
+                updateStats(data);
+
+            } catch (err) {
+                removeTyping();
+                addMessage('ai', '❌ Connection error. Make sure the API server is running.');
+            }
+
+            document.getElementById('send-btn').disabled = false;
+            input.focus();
+        }
+    </script>
+</body>
+</html>
