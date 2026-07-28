@@ -1,19 +1,37 @@
-version: '3.8'
-
 services:
   app:
     build:
       context: ..
       dockerfile: docker/Dockerfile
     ports:
-      - "8000:8000"
+      - "${APP_PORT:-8000}:8000"
     environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
-      - LANGCHAIN_TRACING_V2=true
+      APP_ENV: ${APP_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DEMO_MODE: ${DEMO_MODE:-false}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ROUTER_MODEL: ${ROUTER_MODEL:-claude-sonnet-4-6}
+      AGENT_MODEL: ${AGENT_MODEL:-claude-sonnet-4-6}
+      # Required when APP_ENV=production — the app refuses to start without them.
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-multi-agent-ai-system}
+      TWOCHAT_API_KEY: ${TWOCHAT_API_KEY:-}
+      TWOCHAT_CHANNEL_ID: ${TWOCHAT_CHANNEL_ID:-}
+      TWOCHAT_WEBHOOK_SECRET: ${TWOCHAT_WEBHOOK_SECRET:-}
     volumes:
-      - ./memory/data:/app/memory/data
+      # Named volume rather than a bind mount: the compose file lives in
+      # docker/, so the old relative "./memory/data" resolved to
+      # docker/memory/data and silently persisted nothing the app wrote.
+      - agent-data:/app/memory/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   # Optional: PostgreSQL
   # db:
@@ -21,9 +39,10 @@ services:
   #   environment:
   #     POSTGRES_DB: multiagent
   #     POSTGRES_USER: user
-  #     POSTGRES_PASSWORD: password
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
   #   volumes:
   #     - pgdata:/var/lib/postgresql/data
 
-# volumes:
-#   pgdata:
+volumes:
+  agent-data:
+  # pgdata:

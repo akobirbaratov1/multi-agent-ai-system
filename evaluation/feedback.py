@@ -3,34 +3,22 @@ Human Feedback Collection — Collects thumbs up/down and comments on agent resp
 Used for continuous improvement and fine-tuning signal.
 """
 
-import json
 import uuid
-from pathlib import Path
-from datetime import datetime
-from typing import Optional, List, Dict
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
 
-FEEDBACK_PATH = Path("memory/data/feedback.jsonl")
+from core import config
+from core.storage import append_jsonl, read_jsonl, tail_jsonl
+
+FEEDBACK_PATH = config.data_path("feedback.jsonl")
 
 
 def _append(record: dict):
-    FEEDBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(FEEDBACK_PATH, "a") as f:
-        f.write(json.dumps(record, default=str) + "\n")
+    append_jsonl(FEEDBACK_PATH, record)
 
 
 def _load_all() -> List[dict]:
-    if not FEEDBACK_PATH.exists():
-        return []
-    records = []
-    with open(FEEDBACK_PATH) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-    return records
+    return read_jsonl(FEEDBACK_PATH)
 
 
 def submit_feedback(
@@ -64,7 +52,7 @@ def submit_feedback(
         "sentiment": "positive" if rating == 1 else "negative",
         "comment": comment,
         "agent": agent,
-        "submitted_at": datetime.now().isoformat(),
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
     }
 
     _append(record)
@@ -103,4 +91,4 @@ def get_feedback_stats() -> Dict:
 
 def get_recent_feedback(n: int = 10) -> List[dict]:
     """Return n most recent feedback entries."""
-    return _load_all()[-n:]
+    return tail_jsonl(FEEDBACK_PATH, n)

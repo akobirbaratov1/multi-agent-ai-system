@@ -237,26 +237,72 @@
             if (show) inp.focus();
         }
 
+        // ── Admin authentication ──────────────────────────────
+        // Operator endpoints are guarded by ADMIN_API_KEY. The key is held in
+        // localStorage and sent as X-API-Key; when the deployment has no key
+        // configured (local dev) the header is simply ignored.
+        const API_KEY_STORAGE = 'operatorApiKey';
+
+        function getApiKey() {
+            return localStorage.getItem(API_KEY_STORAGE) || '';
+        }
+
+        function promptForApiKey() {
+            const key = window.prompt('Enter the operator API key (ADMIN_API_KEY):', getApiKey());
+            if (key === null) return false;
+            localStorage.setItem(API_KEY_STORAGE, key.trim());
+            return true;
+        }
+
+        function authHeaders(extra) {
+            const headers = Object.assign({}, extra || {});
+            const key = getApiKey();
+            if (key) headers['X-API-Key'] = key;
+            return headers;
+        }
+
+        async function apiFetch(url, options) {
+            const opts = Object.assign({}, options || {});
+            opts.headers = authHeaders(opts.headers);
+            const res = await fetch(url, opts);
+            if (res.status === 401) {
+                if (promptForApiKey()) return apiFetch(url, options);
+            }
+            return res;
+        }
+
         async function decide(id, decision) {
             const overrideInput = document.getElementById(`override-${id}`);
             const operatorResponse = overrideInput ? overrideInput.value.trim() : null;
 
-            const res = await fetch(`/operator/cases/${id}/review`, {
+            const res = await apiFetch(`/operator/cases/${id}/review`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ decision, operator_response: operatorResponse || null }),
             });
 
-            if (res.ok) loadCases();
-            else alert('Error resolving case');
+            if (res.ok) {
+                loadCases();
+            } else if (res.status === 409) {
+                alert('This case has already been reviewed.');
+                loadCases();
+            } else {
+                alert('Error resolving case');
+            }
         }
 
         async function loadCases() {
             try {
                 const [casesRes, statsRes] = await Promise.all([
-                    fetch('/operator/cases'),
-                    fetch('/operator/stats'),
+                    apiFetch('/operator/cases'),
+                    apiFetch('/operator/stats'),
                 ]);
+                if (!casesRes.ok || !statsRes.ok) {
+                    document.getElementById('cases-list').innerHTML =
+                        '<div class="empty-state"><h3>🔒 Not authorized</h3>'
+                        + '<p>Reload and enter a valid operator API key.</p></div>';
+                    return;
+                }
                 const { cases } = await casesRes.json();
                 const stats = await statsRes.json();
 

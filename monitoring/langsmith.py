@@ -3,33 +3,33 @@ LangSmith Integration — Trace & observe agent runs.
 Falls back gracefully when LANGSMITH_API_KEY is not set.
 """
 
-import os
 import time
 import uuid
-import json
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, Any, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+
+from core import config
+from core.storage import append_jsonl
 
 _LANGSMITH_AVAILABLE = False
 _client = None
 
 try:
-    from langsmith import Client
-    if os.getenv("LANGSMITH_API_KEY"):
+    if config.LANGSMITH_API_KEY:
+        from langsmith import Client
+
         _client = Client()
         _LANGSMITH_AVAILABLE = True
-except ImportError:
-    pass
+except Exception:  # ImportError, or a client that refuses to construct
+    _client = None
+    _LANGSMITH_AVAILABLE = False
 
-LOCAL_TRACE_PATH = Path("memory/data/traces.jsonl")
+LOCAL_TRACE_PATH = config.data_path("traces.jsonl")
 
 
 def _save_local_trace(trace: dict):
     """Persist trace locally when LangSmith is not configured."""
-    LOCAL_TRACE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(LOCAL_TRACE_PATH, "a") as f:
-        f.write(json.dumps(trace, default=str) + "\n")
+    append_jsonl(LOCAL_TRACE_PATH, trace)
 
 
 class AgentTracer:
@@ -50,7 +50,7 @@ class AgentTracer:
         self.events.append({
             "name": name,
             "data": data,
-            "ts": datetime.now().isoformat(),
+            "ts": datetime.now(timezone.utc).isoformat(),
         })
 
     def finish(self, output: Any = None, error: Optional[str] = None) -> dict:
@@ -65,7 +65,7 @@ class AgentTracer:
             "output": output,
             "error": error,
             "latency_ms": latency_ms,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
         if _LANGSMITH_AVAILABLE and _client:
@@ -114,5 +114,5 @@ def get_trace_status() -> dict:
     return {
         "langsmith_enabled": _LANGSMITH_AVAILABLE,
         "local_traces": LOCAL_TRACE_PATH.exists(),
-        "project": os.getenv("LANGSMITH_PROJECT", "multi-agent-ai-system"),
+        "project": config.LANGSMITH_PROJECT,
     }

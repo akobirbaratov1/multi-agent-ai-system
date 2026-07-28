@@ -27,6 +27,11 @@ ENV/
 memory/data/
 !memory/data/.gitkeep
 
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+
 # IDE
 .vscode/
 .idea/
@@ -40,6 +45,3 @@ Thumbs.db
 # Logs
 *.log
 logs/
-
-# Docker
-.dockerignore

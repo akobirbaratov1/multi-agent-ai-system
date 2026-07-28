@@ -2,14 +2,35 @@ name: Tests
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [ main, master, develop, 'claude/**' ]
   pull_request:
-    branches: [ main, master ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: 'pip'
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint
+        run: ruff check .
+
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
 
@@ -23,13 +44,16 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
 
       - name: Run tests
-        run: pytest tests/ -v --tb=short
+        # The suite runs entirely in demo mode with mocked model calls, so no
+        # ANTHROPIC_API_KEY is needed — passing one would let a fork's workflow
+        # reach a real, billable API.
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DEMO_MODE: "true"
+          APP_ENV: "test"
+        run: pytest tests/ -v --tb=short
 
       - name: Upload test results
         if: always()
@@ -37,3 +61,28 @@ jobs:
         with:
           name: test-results-${{ matrix.python-version }}
           path: .pytest_cache/
+          if-no-files-found: ignore
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -f docker/Dockerfile -t multi-agent-ai-system:ci .
+
+      - name: Smoke-test the container
+        run: |
+          docker run -d --name smoke -p 8000:8000 \
+            -e DEMO_MODE=true -e APP_ENV=test multi-agent-ai-system:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health/live; then
+              echo "container is live"
+              curl -fsS http://localhost:8000/health/ready
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "container failed to become healthy"
+          docker logs smoke
+          exit 1

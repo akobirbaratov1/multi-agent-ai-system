@@ -2,26 +2,31 @@
 Logs Analyzer — Analyzes system metrics, feedback, and traces to identify improvement areas.
 """
 
-import json
-from pathlib import Path
-from datetime import datetime, timedelta
-from typing import Dict, List
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Dict, List, Optional
+
+from core import config
+from core.storage import read_jsonl
 
 
 def _load_jsonl(path: Path) -> List[dict]:
-    if not path.exists():
-        return []
-    records = []
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-    return records
+    return read_jsonl(path)
+
+
+def _parse_ts(value: str) -> Optional[datetime]:
+    """
+    Parse a stored timestamp as an aware datetime.
+
+    Records written before 1.1 carry naive local timestamps; comparing those
+    against an aware cutoff raises TypeError and would break every report.
+    """
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def analyze_performance(days: int = 7) -> Dict:
@@ -31,18 +36,18 @@ def analyze_performance(days: int = 7) -> Dict:
     Returns:
         Dict with performance insights and problem areas
     """
-    from monitoring.metrics import _load_all as load_metrics
     from evaluation.feedback import _load_all as load_feedback
+    from monitoring.metrics import _load_all as load_metrics
 
-    since = datetime.now() - timedelta(days=days)
+    since = datetime.now(timezone.utc) - timedelta(days=days)
 
     metrics = [
         r for r in load_metrics()
-        if r.get("timestamp") and datetime.fromisoformat(r["timestamp"]) > since
+        if (_parse_ts(r.get("timestamp", "")) or since) > since
     ]
     feedback = [
         r for r in load_feedback()
-        if r.get("submitted_at") and datetime.fromisoformat(r["submitted_at"]) > since
+        if (_parse_ts(r.get("submitted_at", "")) or since) > since
     ]
 
     # Latency analysis
@@ -91,7 +96,7 @@ def analyze_performance(days: int = 7) -> Dict:
         "agent_satisfaction": agent_satisfaction,
         "problem_areas": problems,
         "health_score": _compute_health_score(error_rate, avg_latency, agent_satisfaction),
-        "analyzed_at": datetime.now().isoformat(),
+        "analyzed_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -109,7 +114,7 @@ def _compute_health_score(error_rate: float, avg_latency: float, satisfaction: d
 
 def get_top_issues(limit: int = 5) -> List[Dict]:
     """Return top recurring user issues from traces."""
-    traces = _load_jsonl(Path("memory/data/traces.jsonl"))
+    traces = _load_jsonl(config.data_path("traces.jsonl"))
     intent_counts: Dict[str, int] = defaultdict(int)
     for trace in traces:
         meta = trace.get("metadata", {})

@@ -1,0 +1,33 @@
+[project]
+name = "multi-agent-ai-system"
+version = "1.1.0"
+description = "Production-ready Multi-Agent AI orchestration with LangGraph, Claude and FAISS RAG"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers"
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = ["memory/data"]
+
+[tool.ruff.lint]
+# Correctness and import hygiene. The `UP` modernization rules are deliberately
+# left out: they would rewrite annotations across every file without changing
+# behaviour, drowning real findings in cosmetic churn.
+select = ["E", "F", "W", "I", "B", "C4"]
+ignore = [
+    "E501",  # line length is handled by the formatter
+    "B008",  # FastAPI's Depends()/Query() defaults are the documented idiom
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]

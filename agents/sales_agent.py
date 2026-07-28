@@ -3,15 +3,13 @@ Sales Agent — Lead Qualification, Questioning, Sales Conversion
 Powered by Claude with structured sales methodology
 """
 
-import os
-import json
-from anthropic import Anthropic
+from core import config
+from core.llm import LLMUnavailable, complete, parse_json_response
+from core.logging_config import get_logger
 from core.state import AgentState
-from tools.crm import MockCRM
+from tools.crm import get_crm
 
-DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
-client = Anthropic() if not DEMO_MODE else None
-crm = MockCRM()
+logger = get_logger(__name__)
 
 
 SALES_SYSTEM_PROMPT = """You are an expert AI Sales Agent. Your goal is to qualify leads and drive conversions.
@@ -38,6 +36,20 @@ Respond in JSON format:
     "key_insights": ["insight1", "insight2"]
 }"""
 
+# Every key the node reads below must appear here — `parse_json_response`
+# layers the model's reply over these, so a partial or malformed response
+# degrades instead of raising KeyError mid-request.
+_DEFAULTS = {
+    "response": "Thanks for reaching out! Could you tell me a bit more about what you're looking for?",
+    "lead_score": 0,
+    "qualification_stage": "awareness",
+    "next_action": "continue_conversation",
+    "key_insights": [],
+}
+
+_VALID_STAGES = {"awareness", "interest", "consideration", "intent", "purchase"}
+_VALID_ACTIONS = {"continue_conversation", "schedule_demo", "create_lead", "close"}
+
 _DEMO_RESPONSES = [
     {
         "response": "Great question! We offer three plans: **Starter** ($49/mo), **Professional** ($149/mo), and **Enterprise** (custom). All include a 14-day free trial. Which team size are you working with?",
@@ -60,45 +72,68 @@ _demo_counter = {"n": 0}
 def _demo_response() -> dict:
     result = _DEMO_RESPONSES[_demo_counter["n"] % len(_DEMO_RESPONSES)]
     _demo_counter["n"] += 1
+    return dict(result)
+
+
+def _normalize(result: dict) -> dict:
+    """Clamp model-supplied fields to the values the CRM logic expects."""
+    try:
+        score = int(result.get("lead_score", 0))
+    except (TypeError, ValueError):
+        score = 0
+    result["lead_score"] = min(max(score, 0), 100)
+
+    if result.get("qualification_stage") not in _VALID_STAGES:
+        result["qualification_stage"] = "awareness"
+    if result.get("next_action") not in _VALID_ACTIONS:
+        result["next_action"] = "continue_conversation"
+    if not isinstance(result.get("key_insights"), list):
+        result["key_insights"] = []
+
     return result
 
 
 def sales_agent(state: AgentState) -> AgentState:
     """Sales Agent — handles lead qualification and conversion"""
 
-    if DEMO_MODE:
+    if config.DEMO_MODE:
         result = _demo_response()
     else:
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1000,
-            system=SALES_SYSTEM_PROMPT,
-            messages=[
-                *[
-                    {"role": msg["role"], "content": msg["content"]}
-                    for msg in state.get("conversation_history", [])[-6:]
-                ],
-                {"role": "user", "content": state["user_message"]},
-            ],
-        )
-
+        history = [
+            {"role": msg["role"], "content": msg["content"]}
+            for msg in (state.get("conversation_history") or [])[-6:]
+            if msg.get("role") in ("user", "assistant") and msg.get("content")
+        ]
         try:
-            result = json.loads(response.content[0].text)
-        except json.JSONDecodeError:
-            result = {
-                "response": response.content[0].text,
-                "lead_score": 0,
-                "qualification_stage": "awareness",
-                "next_action": "continue_conversation",
-                "key_insights": [],
+            text = complete(
+                system=SALES_SYSTEM_PROMPT,
+                model=config.AGENT_MODEL,
+                max_tokens=1000,
+                messages=[*history, {"role": "user", "content": state["user_message"]}],
+            )
+            result = parse_json_response(text, _DEFAULTS)
+        except LLMUnavailable:
+            logger.warning("Sales agent model call failed; returning fallback response")
+            return {
+                **state,
+                "agent_response": None,
+                "agent_metadata": {"error": "model_unavailable"},
+                "final_response": (
+                    "I'm having trouble reaching our systems right now. "
+                    "Please try again shortly and I'll pick up where we left off."
+                ),
+                "requires_human": True,
+                "error": "model_unavailable",
             }
 
-    # CRM actions based on lead score
+    result = _normalize(result)
+
+    crm = get_crm()
     crm_actions = []
     lead_id = None
     lead_created = False
 
-    if result["lead_score"] >= 60 and result["next_action"] in ["create_lead", "close"]:
+    if result["lead_score"] >= 60 and result["next_action"] in ("create_lead", "close"):
         lead = crm.create_lead(
             user_id=state["user_id"],
             stage=result["qualification_stage"],
@@ -111,7 +146,7 @@ def sales_agent(state: AgentState) -> AgentState:
 
     if result["next_action"] == "schedule_demo":
         crm.log_activity(
-            lead_id=state["user_id"],
+            lead_id=lead_id or state["user_id"],
             activity="demo_requested",
             notes=result["response"],
         )
@@ -119,10 +154,11 @@ def sales_agent(state: AgentState) -> AgentState:
 
         # Schedule a 24h follow-up
         from tools.followup import schedule_followup
+
         schedule_followup(
             lead_id=lead_id or state["user_id"],
             user_id=state["user_id"],
-            email=None,
+            email=(state.get("user_context") or {}).get("email"),
             reason="demo_requested",
             delay_hours=24,
         )

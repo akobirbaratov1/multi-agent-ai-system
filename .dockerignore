@@ -1,0 +1,41 @@
+# Secrets — must never reach the image layer
+.env
+.env.*
+!.env.example
+
+# VCS & CI
+.git
+.github
+.gitignore
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Runtime data — the container mounts its own volume
+memory/data/
+
+# Editors & OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Tests and docs aren't needed at runtime
+tests/
+*.md
+!README.md

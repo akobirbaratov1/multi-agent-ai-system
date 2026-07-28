@@ -3,14 +3,15 @@ Confidence Scoring System
 Determines routing behavior based on intent classification confidence.
 """
 
+from core import config
 from core.state import ConfidenceLevel
 
 
 def compute_confidence_level(score: float) -> ConfidenceLevel:
     """Map a 0-1 confidence score to a ConfidenceLevel enum."""
-    if score >= 0.85:
+    if score >= config.CONFIDENCE_THRESHOLD_HIGH:
         return ConfidenceLevel.HIGH
-    elif score >= 0.60:
+    if score >= config.CONFIDENCE_THRESHOLD_MEDIUM:
         return ConfidenceLevel.MEDIUM
     return ConfidenceLevel.LOW
 
@@ -27,6 +28,10 @@ def confidence_summary(score: float) -> dict:
         "score": round(score, 3),
         "level": level.value,
         "auto_proceed": level != ConfidenceLevel.LOW,
+        "thresholds": {
+            "high": config.CONFIDENCE_THRESHOLD_HIGH,
+            "medium": config.CONFIDENCE_THRESHOLD_MEDIUM,
+        },
         "description": {
             ConfidenceLevel.HIGH: "High confidence — auto routing enabled",
             ConfidenceLevel.MEDIUM: "Medium confidence — proceeding with caution",

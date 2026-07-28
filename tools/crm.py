@@ -3,13 +3,21 @@ Mock CRM — Lead Management, Email Dispatch, Follow-up
 Simulates real CRM integration (HubSpot, Salesforce compatible structure)
 """
 
+import threading
 import uuid
-import json
-from datetime import datetime
-from pathlib import Path
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-CRM_DATA_PATH = Path("memory/data/crm_data.json")
+from core import config
+from core.storage import read_json, write_json
+
+CRM_DATA_PATH = config.data_path("crm_data.json")
+
+_EMPTY: Dict[str, list] = {"leads": [], "activities": [], "emails": []}
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class MockCRM:
@@ -19,19 +27,20 @@ class MockCRM:
     """
 
     def __init__(self):
+        self._lock = threading.RLock()
         self.data = self._load_data()
 
     def _load_data(self) -> Dict:
-        if CRM_DATA_PATH.exists():
-            with open(CRM_DATA_PATH) as f:
-                return json.load(f)
-        return {"leads": [], "activities": [], "emails": []}
+        data = read_json(CRM_DATA_PATH, default=None)
+        if not isinstance(data, dict):
+            return {key: list(value) for key, value in _EMPTY.items()}
+        # Tolerate a partial document written by an older build.
+        for key in _EMPTY:
+            data.setdefault(key, [])
+        return data
 
-    def _save_data(self):
-        import os
-        os.makedirs(CRM_DATA_PATH.parent, exist_ok=True)
-        with open(CRM_DATA_PATH, "w") as f:
-            json.dump(self.data, f, indent=2, default=str)
+    def _save_data(self) -> None:
+        write_json(CRM_DATA_PATH, self.data)
 
     def create_lead(
         self,
@@ -43,11 +52,12 @@ class MockCRM:
     ) -> Dict:
         """Create a new lead in CRM"""
 
+        timestamp = _now()
         lead = {
             "id": f"LEAD-{str(uuid.uuid4())[:8].upper()}",
             "user_id": user_id,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
+            "created_at": timestamp,
+            "updated_at": timestamp,
             "stage": stage,
             "score": score,
             "insights": insights,
@@ -57,20 +67,22 @@ class MockCRM:
             "tags": ["ai_qualified"],
         }
 
-        self.data["leads"].append(lead)
-        self._save_data()
+        with self._lock:
+            self.data["leads"].append(lead)
+            self._save_data()
 
         return lead
 
     def update_lead(self, lead_id: str, updates: Dict) -> Optional[Dict]:
         """Update existing lead"""
 
-        for lead in self.data["leads"]:
-            if lead["id"] == lead_id:
-                lead.update(updates)
-                lead["updated_at"] = datetime.now().isoformat()
-                self._save_data()
-                return lead
+        with self._lock:
+            for lead in self.data["leads"]:
+                if lead["id"] == lead_id:
+                    lead.update(updates)
+                    lead["updated_at"] = _now()
+                    self._save_data()
+                    return lead
         return None
 
     def log_activity(
@@ -88,11 +100,12 @@ class MockCRM:
             "activity": activity,
             "notes": notes,
             "agent": agent,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": _now(),
         }
 
-        self.data["activities"].append(activity_record)
-        self._save_data()
+        with self._lock:
+            self.data["activities"].append(activity_record)
+            self._save_data()
 
         return activity_record
 
@@ -114,44 +127,90 @@ class MockCRM:
             "template": template,
             "lead_id": lead_id,
             "status": "sent",  # Mock: always succeeds
-            "sent_at": datetime.now().isoformat(),
+            "sent_at": _now(),
         }
 
-        self.data["emails"].append(email_record)
-        self._save_data()
+        with self._lock:
+            self.data["emails"].append(email_record)
+            self._save_data()
 
         return email_record
 
     def get_lead(self, lead_id: str) -> Optional[Dict]:
         """Get lead by ID"""
-        for lead in self.data["leads"]:
-            if lead["id"] == lead_id:
-                return lead
+        with self._lock:
+            for lead in self.data["leads"]:
+                if lead["id"] == lead_id:
+                    return dict(lead)
         return None
 
     def get_leads_by_stage(self, stage: str) -> List[Dict]:
         """Get all leads in a stage"""
-        return [l for l in self.data["leads"] if l["stage"] == stage]
+        with self._lock:
+            return [dict(lead) for lead in self.data["leads"] if lead.get("stage") == stage]
+
+    def list_leads(self) -> List[Dict]:
+        """Return a snapshot of all leads."""
+        with self._lock:
+            return [dict(lead) for lead in self.data["leads"]]
+
+    def list_activities(self) -> List[Dict]:
+        """Return a snapshot of all logged activities."""
+        with self._lock:
+            return [dict(a) for a in self.data["activities"]]
 
     def get_stats(self) -> Dict:
         """CRM statistics dashboard"""
 
-        leads = self.data["leads"]
-        stages = {}
+        with self._lock:
+            leads = list(self.data["leads"])
+            activity_count = len(self.data["activities"])
+            email_count = len(self.data["emails"])
+
+        stages: Dict[str, int] = {}
         for lead in leads:
             stage = lead.get("stage", "unknown")
             stages[stage] = stages.get(stage, 0) + 1
 
         avg_score = (
-            sum(l.get("score", 0) for l in leads) / len(leads)
+            sum(lead.get("score", 0) for lead in leads) / len(leads)
             if leads else 0
         )
 
         return {
             "total_leads": len(leads),
-            "total_activities": len(self.data["activities"]),
-            "total_emails": len(self.data["emails"]),
+            "total_activities": activity_count,
+            "total_emails": email_count,
             "leads_by_stage": stages,
             "average_lead_score": round(avg_score, 1),
-            "active_leads": sum(1 for l in leads if l.get("status") == "active"),
+            "active_leads": sum(1 for lead in leads if lead.get("status") == "active"),
         }
+
+
+# ── shared instance ──────────────────────────────────────
+#
+# Each importer used to build its own MockCRM. Because the whole document is
+# read once at construction and rewritten wholesale on every save, two
+# instances silently clobbered each other: a lead created by the sales agent
+# never appeared in /crm/leads, and the next write from either instance dropped
+# the other's records. One process-wide instance removes the lost-update window.
+
+_crm: Optional[MockCRM] = None
+_crm_guard = threading.Lock()
+
+
+def get_crm() -> MockCRM:
+    """Return the process-wide CRM instance, constructing it on first use."""
+    global _crm
+    if _crm is None:
+        with _crm_guard:
+            if _crm is None:
+                _crm = MockCRM()
+    return _crm
+
+
+def reset_crm() -> None:
+    """Drop the shared instance. Used by tests that redirect the data paths."""
+    global _crm
+    with _crm_guard:
+        _crm = None
