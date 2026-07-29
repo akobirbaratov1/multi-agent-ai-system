@@ -4,12 +4,14 @@ Automated Evaluation — Tests agent quality against labeled datasets.
 
 import json
 import time
-from pathlib import Path
-from typing import List, Dict, Optional
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
 
-DATASETS_DIR = Path("evaluation/datasets")
-RESULTS_PATH = Path("memory/data/eval_results.jsonl")
+from core import config
+from core.storage import append_jsonl
+
+DATASETS_DIR = config.BASE_DIR / "evaluation" / "datasets"
+RESULTS_PATH = config.data_path("eval_results.jsonl")
 
 SAMPLE_DATASET = [
     {
@@ -51,9 +53,7 @@ SAMPLE_DATASET = [
 
 
 def _save_result(result: dict):
-    RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(RESULTS_PATH, "a") as f:
-        f.write(json.dumps(result, default=str) + "\n")
+    append_jsonl(RESULTS_PATH, result)
 
 
 def run_evaluation(
@@ -109,14 +109,14 @@ def run_evaluation(
                 "confidence": response.get("confidence"),
                 "latency_ms": latency,
                 "error": None,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         except Exception as e:
             result = {
                 "id": case["id"],
                 "input": case["input"],
                 "error": str(e),
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
         results.append(result)
@@ -128,7 +128,7 @@ def run_evaluation(
         "intent_accuracy": round(correct_intent / total, 3) if total else 0,
         "agent_accuracy": round(correct_agent / total, 3) if total else 0,
         "results": results,
-        "run_at": datetime.now().isoformat(),
+        "run_at": datetime.now(timezone.utc).isoformat(),
     }
 
     return summary

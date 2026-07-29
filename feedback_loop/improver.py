@@ -4,10 +4,8 @@ Uses Claude to analyze negative feedback patterns and suggest prompt changes.
 """
 
 import os
-import json
-from typing import List, Dict, Optional
-from datetime import datetime
-
+from datetime import datetime, timezone
+from typing import Dict, List
 
 DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
 
@@ -78,9 +76,8 @@ def generate_improvement_suggestions(analysis: Dict) -> List[Dict]:
 
 def save_improvement_report(suggestions: List[Dict], analysis: Dict) -> str:
     """Save improvement report to disk and return the file path."""
-    import os
     report = {
-        "generated_at": datetime.now().isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "health_score": analysis.get("health_score", 0),
         "problem_areas": analysis.get("problem_areas", []),
         "suggestions": suggestions,
@@ -88,12 +85,15 @@ def save_improvement_report(suggestions: List[Dict], analysis: Dict) -> str:
                    f"{sum(1 for s in suggestions if s['priority'] == 'high')} high priority",
     }
 
-    path = f"memory/data/improvement_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    os.makedirs("memory/data", exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(report, f, indent=2)
+    from core import config
+    from core.storage import write_json
 
-    return path
+    path = config.data_path(
+        f"improvement_report_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
+    )
+    write_json(path, report)
+
+    return str(path)
 
 
 def run_improvement_cycle() -> Dict:

@@ -3,9 +3,9 @@ Core State Schema for Multi-Agent AI System
 LangGraph state management
 """
 
-from typing import TypedDict, Annotated, List, Optional, Dict, Any
-from enum import Enum
 import operator
+from enum import Enum
+from typing import Annotated, Any, Dict, List, Optional, TypedDict
 
 
 class AgentType(str, Enum):

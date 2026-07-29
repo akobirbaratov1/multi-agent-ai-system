@@ -6,30 +6,69 @@ Docs: https://docs.2chat.co
 Webhook: POST /webhook/2chat
 """
 
-import os
+import re
+import threading
+from collections import OrderedDict
+from typing import List, Optional
+
 import httpx
-import logging
-from typing import Optional
 
-logger = logging.getLogger(__name__)
+from core import config
+from core.logging_config import get_logger
 
-TWOCHAT_API_KEY = os.getenv("TWOCHAT_API_KEY", "")
-TWOCHAT_CHANNEL_ID = os.getenv("TWOCHAT_CHANNEL_ID", "")
-TWOCHAT_API_URL = "https://api.2chat.co/v1"
+logger = get_logger(__name__)
 
-# Per-user session history (in-memory)
-_sessions: dict = {}
+MAX_SESSIONS = 5_000
+MAX_TURNS = 10
+MAX_REPLY_CHARS = 4_000
 
-
-def _get_history(phone: str) -> list:
-    return _sessions.get(phone, [])
+# E.164, which is what 2Chat delivers. Anything else is not a number we can
+# route a reply to, and it becomes a `user_id` in rate limiting and CRM records.
+_PHONE_RE = re.compile(r"^\+[1-9]\d{6,14}$")
 
 
-def _update_history(phone: str, role: str, content: str):
-    if phone not in _sessions:
-        _sessions[phone] = []
-    _sessions[phone].append({"role": role, "content": content})
-    _sessions[phone] = _sessions[phone][-10:]
+class _SessionStore:
+    """
+    Bounded per-phone conversation history.
+
+    A plain dict grew one entry per phone number forever — unbounded memory in
+    a process that is expected to stay up for weeks. This evicts the
+    least-recently-used conversation once the cap is reached.
+    """
+
+    def __init__(self, max_sessions: int = MAX_SESSIONS, max_turns: int = MAX_TURNS):
+        self._data: "OrderedDict[str, List[dict]]" = OrderedDict()
+        self._max_sessions = max_sessions
+        self._max_turns = max_turns
+        self._lock = threading.Lock()
+
+    def get(self, phone: str) -> List[dict]:
+        with self._lock:
+            history = self._data.get(phone)
+            if history is None:
+                return []
+            self._data.move_to_end(phone)
+            return list(history)
+
+    def append(self, phone: str, role: str, content: str) -> None:
+        with self._lock:
+            history = self._data.get(phone, [])
+            history.append({"role": role, "content": content})
+            self._data[phone] = history[-self._max_turns:]
+            self._data.move_to_end(phone)
+            while len(self._data) > self._max_sessions:
+                self._data.popitem(last=False)
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._data)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._data.clear()
+
+
+_sessions = _SessionStore()
 
 
 def parse_incoming(payload: dict) -> Optional[dict]:
@@ -50,26 +89,30 @@ def parse_incoming(payload: dict) -> Optional[dict]:
         }
     }
     """
-    event = payload.get("event", "")
-    if event != "message.received":
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("event") != "message.received":
         return None
 
-    data = payload.get("data", {})
-    phone = data.get("from", "")
-    text = data.get("text", "").strip()
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
 
-    if not phone or not text:
+    phone = str(data.get("from") or "").strip()
+    text = str(data.get("text") or "").strip()
+
+    if not _PHONE_RE.match(phone) or not text:
         return None
 
     return {
         "phone": phone,
-        "text": text,
-        "channel_id": data.get("channel_id", TWOCHAT_CHANNEL_ID),
-        "message_id": data.get("id", ""),
+        "text": text[:config.MAX_MESSAGE_LENGTH],
+        "channel_id": str(data.get("channel_id") or config.TWOCHAT_CHANNEL_ID or ""),
+        "message_id": str(data.get("id") or ""),
     }
 
 
-async def send_message(to: str, text: str, channel_id: str = None) -> dict:
+async def send_message(to: str, text: str, channel_id: Optional[str] = None) -> dict:
     """
     Send a WhatsApp/SMS message via 2Chat API.
 
@@ -79,30 +122,30 @@ async def send_message(to: str, text: str, channel_id: str = None) -> dict:
         channel_id: 2Chat channel ID (uses env var if not provided)
 
     Returns:
-        API response dict
+        API response dict. Delivery failures are reported, never raised — the
+        caller is a webhook handler that must still return a response.
     """
-    if not TWOCHAT_API_KEY:
+    if not config.TWOCHAT_API_KEY:
         logger.warning("TWOCHAT_API_KEY not set — message not sent (mock mode)")
         return {"status": "mock", "to": to, "text": text}
 
-    channel = channel_id or TWOCHAT_CHANNEL_ID
+    channel = channel_id or config.TWOCHAT_CHANNEL_ID
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{TWOCHAT_API_URL}/messages/send-text",
-            headers={
-                "Authorization": f"Bearer {TWOCHAT_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "to": to,
-                "text": text,
-                "channel_id": channel,
-            },
-            timeout=10.0,
-        )
-        response.raise_for_status()
-        return response.json()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{config.TWOCHAT_API_URL}/messages/send-text",
+                headers={
+                    "Authorization": f"Bearer {config.TWOCHAT_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={"to": to, "text": text[:MAX_REPLY_CHARS], "channel_id": channel},
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPError as exc:
+        logger.error("2Chat delivery failed", extra={"error": str(exc)})
+        return {"status": "delivery_failed", "to": to}
 
 
 async def handle_incoming(payload: dict) -> dict:
@@ -115,6 +158,8 @@ async def handle_incoming(payload: dict) -> dict:
     Returns:
         Processing result dict
     """
+    import asyncio
+
     from agents.orchestrator import process_message
 
     message = parse_incoming(payload)
@@ -123,54 +168,54 @@ async def handle_incoming(payload: dict) -> dict:
 
     phone = message["phone"]
     text = message["text"]
-    history = _get_history(phone)
-    _update_history(phone, "user", text)
+    history = _sessions.get(phone)
+    _sessions.append(phone, "user", text)
 
     try:
-        result = process_message(
+        # `process_message` is synchronous and calls the model; running it
+        # inline would block the event loop for the whole request.
+        result = await asyncio.to_thread(
+            process_message,
             user_id=phone,
             message=text,
             interface="2chat",
             conversation_history=history,
         )
-
-        reply = result.get("response", "I could not process your request.")
-        agent = result.get("agent", "unknown").upper()
-        reply_with_meta = f"{reply}\n\n_{agent} Agent_"
-
-        _update_history(phone, "assistant", reply)
-
-        await send_message(
-            to=phone,
-            text=reply_with_meta,
-            channel_id=message["channel_id"],
-        )
-
-        return {
-            "status": "processed",
-            "phone": phone,
-            "agent": result.get("agent"),
-            "intent": result.get("intent"),
-            "confidence": result.get("confidence"),
-            "rag_used": result.get("rag_used"),
-        }
-
-    except Exception as e:
-        logger.error(f"2Chat processing error for {phone}: {e}")
-
+    except Exception:
+        logger.exception("2Chat processing error", extra={"phone": phone})
         await send_message(
             to=phone,
             text="Something went wrong. Please try again shortly.",
             channel_id=message["channel_id"],
         )
+        return {"status": "error"}
 
-        return {"status": "error", "error": str(e)}
+    reply = result.get("response") or "I could not process your request."
+    agent = str(result.get("agent") or "unknown").upper()
+
+    _sessions.append(phone, "assistant", reply)
+
+    await send_message(
+        to=phone,
+        text=f"{reply}\n\n_{agent} Agent_",
+        channel_id=message["channel_id"],
+    )
+
+    return {
+        "status": "processed",
+        "phone": phone,
+        "agent": result.get("agent"),
+        "intent": result.get("intent"),
+        "confidence": result.get("confidence"),
+        "rag_used": result.get("rag_used"),
+    }
 
 
 def get_status() -> dict:
     """Return 2Chat integration status."""
     return {
-        "configured": bool(TWOCHAT_API_KEY and TWOCHAT_CHANNEL_ID),
-        "channel_id": TWOCHAT_CHANNEL_ID or "not set",
+        "configured": bool(config.TWOCHAT_API_KEY and config.TWOCHAT_CHANNEL_ID),
+        "channel_id": config.TWOCHAT_CHANNEL_ID or "not set",
+        "webhook_signature_verification": bool(config.TWOCHAT_WEBHOOK_SECRET),
         "active_sessions": len(_sessions),
     }

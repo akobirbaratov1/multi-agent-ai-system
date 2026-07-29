@@ -3,17 +3,14 @@ Search Tools — Knowledge base & web search utilities
 Provides unified search interface for agents.
 """
 
-from typing import List, Dict, Optional
-from memory.vector_store import FAISSVectorStore
+from typing import Dict, List, Optional
 
-_vector_store: Optional[FAISSVectorStore] = None
+from memory.vector_store import FAISSVectorStore, get_vector_store
 
 
 def _get_store() -> FAISSVectorStore:
-    global _vector_store
-    if _vector_store is None:
-        _vector_store = FAISSVectorStore()
-    return _vector_store
+    """Use the process-wide store so newly ingested documents are visible."""
+    return get_vector_store()
 
 
 def search_knowledge_base(query: str, k: int = 5, category: Optional[str] = None) -> List[Dict]:

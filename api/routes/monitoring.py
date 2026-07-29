@@ -1,10 +1,15 @@
 """Monitoring & feedback routes."""
 
-from fastapi import APIRouter
+from datetime import date
+
+from fastapi import APIRouter, Depends, Query
+
+from api.deps import require_admin
 from api.schemas import FeedbackRequest, FeedbackResponse
-from monitoring.metrics import get_summary
+from core.review_queue import load_cases
+from evaluation.feedback import get_feedback_stats, submit_feedback
 from monitoring.langsmith import get_trace_status
-from evaluation.feedback import submit_feedback, get_feedback_stats
+from monitoring.metrics import get_summary
 
 router = APIRouter(prefix="/monitoring", tags=["Monitoring"])
 
@@ -40,44 +45,51 @@ async def feedback_stats():
     return get_feedback_stats()
 
 
-@router.get("/analysis")
-async def performance_analysis(days: int = 7):
+# The reporting endpoints below scan the full metrics/feedback history and are
+# an easy way to burn CPU, so they sit behind the admin guard.
+
+@router.get("/analysis", dependencies=[Depends(require_admin)])
+async def performance_analysis(days: int = Query(7, ge=1, le=90)):
     """System performance analysis for the past N days."""
     from feedback_loop.analyzer import analyze_performance
+
     return analyze_performance(days=days)
 
 
-@router.get("/improvements")
+@router.get("/improvements", dependencies=[Depends(require_admin)])
 async def improvement_suggestions():
     """AI-generated improvement suggestions based on recent performance."""
     from feedback_loop.improver import run_improvement_cycle
+
     return run_improvement_cycle()
 
 
-@router.get("/report")
+@router.get("/report", dependencies=[Depends(require_admin)])
 async def weekly_report():
     """Full weekly performance report."""
     from feedback_loop.reporter import generate_weekly_report
+
     return generate_weekly_report()
 
 
-@router.get("/followups")
+@router.get("/followups", dependencies=[Depends(require_admin)])
 async def followup_stats():
     """Follow-up queue statistics."""
     from tools.followup import get_stats
+
     return get_stats()
 
 
-@router.get("/operator/summary")
+@router.get("/operator/summary", dependencies=[Depends(require_admin)])
 async def operator_summary():
     """Human-in-the-loop queue summary."""
-    from api.routes.operator import _load
-    cases = _load()
+    cases = load_cases()
+    today = date.today().isoformat()
     return {
-        "pending": sum(1 for c in cases if c["status"] == "pending"),
+        "pending": sum(1 for c in cases if c.get("status") == "pending"),
         "resolved_today": sum(
             1 for c in cases
-            if c["status"] == "resolved"
-            and c.get("resolved_at", "")[:10] == __import__("datetime").datetime.now().strftime("%Y-%m-%d")
+            if c.get("status") == "resolved"
+            and (c.get("resolved_at") or "")[:10] == today
         ),
     }

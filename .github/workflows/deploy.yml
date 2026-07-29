@@ -1,0 +1,76 @@
+name: Deploy
+
+# Deployment is manual by default. Flip to the `push` trigger below only once
+# you are comfortable with every merge to main reaching production.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to deploy"
+        required: false
+        default: "origin/main"
+  # push:
+  #   branches: [ main ]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Attach required reviewers / secrets to this environment in repo settings.
+    environment: production
+
+    steps:
+      - name: Check required secrets
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          missing=""
+          [ -n "$HOST" ] || missing="$missing DEPLOY_HOST"
+          [ -n "$USER" ] || missing="$missing DEPLOY_USER"
+          [ -n "$KEY" ]  || missing="$missing DEPLOY_SSH_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            exit 1
+          fi
+
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          if [ -n "$KNOWN_HOSTS" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            # No pinned host key: trust-on-first-use. Set DEPLOY_KNOWN_HOSTS
+            # (ssh-keyscan output) to pin it and remove this fallback.
+            echo "::warning::DEPLOY_KNOWN_HOSTS is not set — the host key is not verified"
+            ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+          APP_DIR: ${{ secrets.DEPLOY_APP_DIR }}
+          REF: ${{ github.event.inputs.ref || 'origin/main' }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
+              -o BatchMode=yes -o ConnectTimeout=15 \
+              "$USER@$HOST" \
+              "APP_DIR='${APP_DIR:-/opt/multi-agent-ai-system}' \
+               bash -lc '\"\${APP_DIR}/deploy/deploy.sh\" \"$REF\"'"
+
+      - name: Clean up credentials
+        if: always()
+        run: rm -f ~/.ssh/id_deploy

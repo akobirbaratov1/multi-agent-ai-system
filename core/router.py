@@ -3,13 +3,15 @@ Intent Classification & Agent Router
 Uses Claude to classify user intent and route to appropriate agent
 """
 
-import os
 import json
-from anthropic import Anthropic
-from core.state import AgentState, IntentType, AgentType, ConfidenceLevel
 
-DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
-client = Anthropic() if not DEMO_MODE else None
+from core import config
+from core.confidence import compute_confidence_level
+from core.llm import LLMUnavailable, complete, parse_json_response
+from core.logging_config import get_logger
+from core.state import AgentState, AgentType, ConfidenceLevel, IntentType
+
+logger = get_logger(__name__)
 
 _DEMO_ROUTING = {
     ("price", "pricing", "plan", "buy", "demo", "cost", "enterprise", "sales"): "sales",
@@ -33,6 +35,25 @@ Respond ONLY with valid JSON in this exact format:
     "key_signals": ["signal1", "signal2"]
 }"""
 
+_ROUTER_DEFAULTS = {
+    "intent": "support",
+    "confidence": 0.5,
+    "reasoning": "",
+    "key_signals": [],
+}
+
+_INTENT_MAP = {
+    "sales": IntentType.SALES,
+    "support": IntentType.SUPPORT,
+    "research": IntentType.RESEARCH,
+}
+
+_AGENT_MAP = {
+    IntentType.SALES: AgentType.SALES,
+    IntentType.SUPPORT: AgentType.SUPPORT,
+    IntentType.RESEARCH: AgentType.RESEARCH,
+}
+
 
 def _demo_classify(message: str) -> dict:
     """Keyword-based intent classification for demo mode (no API key needed)."""
@@ -46,57 +67,53 @@ def _demo_classify(message: str) -> dict:
 def classify_intent(state: AgentState) -> AgentState:
     """Classify user intent using Claude (or keyword matching in demo mode)."""
 
-    if DEMO_MODE:
+    if config.DEMO_MODE:
         result = _demo_classify(state["user_message"])
     else:
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=500,
-            system=ROUTER_SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"""
-User message: "{state['user_message']}"
-Conversation history: {json.dumps(state.get('conversation_history', [])[-3:], ensure_ascii=False)}
-User context: {json.dumps(state.get('user_context', {}), ensure_ascii=False)}
-"""
-                }
-            ]
+        history = json.dumps(
+            (state.get("conversation_history") or [])[-3:], ensure_ascii=False
         )
+        context = json.dumps(state.get("user_context") or {}, ensure_ascii=False)
 
         try:
-            result = json.loads(response.content[0].text)
-        except json.JSONDecodeError:
-            result = {"intent": "support", "confidence": 0.5, "reasoning": "parse error", "key_signals": []}
+            text = complete(
+                system=ROUTER_SYSTEM_PROMPT,
+                model=config.ROUTER_MODEL,
+                max_tokens=500,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f'User message: "{state["user_message"]}"\n'
+                        f"Conversation history: {history}\n"
+                        f"User context: {context}\n"
+                    ),
+                }],
+            )
+            result = parse_json_response(text, _ROUTER_DEFAULTS)
+        except LLMUnavailable:
+            # Routing must not take the turn down. Fall back to the keyword
+            # classifier with low confidence, which sends the case to a human.
+            logger.warning("Intent classification unavailable; falling back to keywords")
+            result = _demo_classify(state["user_message"])
+            result["confidence"] = 0.0
+            result["reasoning"] = "router unavailable"
 
-    intent_map = {
-        "sales": IntentType.SALES,
-        "support": IntentType.SUPPORT,
-        "research": IntentType.RESEARCH,
-    }
+    intent = _INTENT_MAP.get(str(result.get("intent", "")).lower(), IntentType.UNKNOWN)
 
-    agent_map = {
-        IntentType.SALES: AgentType.SALES,
-        IntentType.SUPPORT: AgentType.SUPPORT,
-        IntentType.RESEARCH: AgentType.RESEARCH,
-    }
+    # A malformed confidence must not escape as a string or an out-of-range float.
+    try:
+        confidence = float(result.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = min(max(confidence, 0.0), 1.0)
 
-    intent = intent_map.get(result["intent"], IntentType.UNKNOWN)
-    confidence = result["confidence"]
-
-    if confidence >= 0.85:
-        confidence_level = ConfidenceLevel.HIGH
-    elif confidence >= 0.60:
-        confidence_level = ConfidenceLevel.MEDIUM
-    else:
-        confidence_level = ConfidenceLevel.LOW
+    confidence_level = compute_confidence_level(confidence)
 
     return {
         **state,
         "intent": intent,
         "intent_confidence": confidence,
-        "assigned_agent": agent_map.get(intent, AgentType.ORCHESTRATOR),
+        "assigned_agent": _AGENT_MAP.get(intent, AgentType.ORCHESTRATOR),
         "confidence_level": confidence_level,
         "requires_human": confidence_level == ConfidenceLevel.LOW,
     }
@@ -105,13 +122,11 @@ User context: {json.dumps(state.get('user_context', {}), ensure_ascii=False)}
 def route_to_agent(state: AgentState) -> str:
     """LangGraph conditional edge — route to appropriate agent"""
 
-    if state.get("requires_human"):
-        return "human_review"
-
     if not state.get("is_valid") or state.get("is_spam"):
         return "reject"
 
-    intent = state.get("intent")
+    if state.get("requires_human"):
+        return "human_review"
 
     routing = {
         IntentType.SALES: "sales_agent",
@@ -119,4 +134,4 @@ def route_to_agent(state: AgentState) -> str:
         IntentType.RESEARCH: "research_agent",
     }
 
-    return routing.get(intent, "support_agent")
+    return routing.get(state.get("intent"), "support_agent")

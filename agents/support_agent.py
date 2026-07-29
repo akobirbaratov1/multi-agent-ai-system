@@ -3,15 +3,13 @@ Support Agent — FAQ retrieval, Problem Solving, Escalation
 Uses RAG for knowledge base retrieval
 """
 
-import os
-import json
-from anthropic import Anthropic
+from core import config
+from core.llm import LLMUnavailable, complete, parse_json_response
+from core.logging_config import get_logger
 from core.state import AgentState
-from memory.vector_store import FAISSVectorStore
+from memory.vector_store import get_vector_store
 
-DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
-client = Anthropic() if not DEMO_MODE else None
-vector_store = FAISSVectorStore()
+logger = get_logger(__name__)
 
 
 SUPPORT_SYSTEM_PROMPT = """You are an expert AI Support Agent. Your goal is to resolve user issues efficiently.
@@ -39,6 +37,15 @@ Respond in JSON format:
     "requires_escalation": false
 }"""
 
+_DEFAULTS = {
+    "response": "Thanks for getting in touch — could you share a bit more detail about the issue?",
+    "confidence": 0.5,
+    "issue_category": "general",
+    "resolution_status": "in_progress",
+    "kb_articles_used": [],
+    "requires_escalation": False,
+}
+
 _DEMO_RESPONSES = [
     {
         "response": "I found a relevant KB article for you! To fix **API connection issues**:\n\n1. Verify your API key is valid (Dashboard → Settings → API Keys)\n2. Check your network connectivity\n3. Ensure you're hitting `https://api.ourapp.com` (not HTTP)\n4. Rate limit: 100 req/min on Starter, 1000 on Pro\n\nDoes this resolve your issue?",
@@ -60,8 +67,8 @@ _DEMO_RESPONSES = [
 _demo_counter = {"n": 0}
 
 
-def _demo_response(docs: list) -> dict:
-    result = _DEMO_RESPONSES[_demo_counter["n"] % len(_DEMO_RESPONSES)].copy()
+def _demo_response() -> dict:
+    result = dict(_DEMO_RESPONSES[_demo_counter["n"] % len(_DEMO_RESPONSES)])
     _demo_counter["n"] += 1
     return result
 
@@ -69,42 +76,53 @@ def _demo_response(docs: list) -> dict:
 def support_agent(state: AgentState) -> AgentState:
     """Support Agent — handles FAQ and problem solving with RAG"""
 
-    retrieved_docs = vector_store.search(query=state["user_message"], k=3)
+    retrieved_docs = get_vector_store().search(query=state["user_message"], k=3)
 
-    if DEMO_MODE:
-        result = _demo_response(retrieved_docs)
+    if config.DEMO_MODE:
+        result = _demo_response()
     else:
-        context = "\n\n".join([
-            f"[KB Article: {doc['title']}]\n{doc['content']}"
+        context = "\n\n".join(
+            f"[KB Article: {doc.get('title', 'Untitled')}]\n{doc.get('content', '')}"
             for doc in retrieved_docs
-        ])
-
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1000,
-            system=SUPPORT_SYSTEM_PROMPT,
-            messages=[
-                *[
-                    {"role": msg["role"], "content": msg["content"]}
-                    for msg in state.get("conversation_history", [])[-6:]
-                ],
-                {
-                    "role": "user",
-                    "content": f"User issue: {state['user_message']}\n\nRelevant knowledge base articles:\n{context if context else 'No relevant articles found.'}",
-                },
-            ],
         )
+        history = [
+            {"role": msg["role"], "content": msg["content"]}
+            for msg in (state.get("conversation_history") or [])[-6:]
+            if msg.get("role") in ("user", "assistant") and msg.get("content")
+        ]
 
         try:
-            result = json.loads(response.content[0].text)
-        except json.JSONDecodeError:
-            result = {
-                "response": response.content[0].text,
-                "confidence": 0.5,
-                "issue_category": "general",
-                "resolution_status": "in_progress",
-                "kb_articles_used": [],
-                "requires_escalation": False,
+            text = complete(
+                system=SUPPORT_SYSTEM_PROMPT,
+                model=config.AGENT_MODEL,
+                max_tokens=1000,
+                messages=[
+                    *history,
+                    {
+                        "role": "user",
+                        "content": (
+                            f"User issue: {state['user_message']}\n\n"
+                            "Relevant knowledge base articles:\n"
+                            f"{context if context else 'No relevant articles found.'}"
+                        ),
+                    },
+                ],
+            )
+            result = parse_json_response(text, _DEFAULTS)
+        except LLMUnavailable:
+            logger.warning("Support agent model call failed; escalating to a human")
+            return {
+                **state,
+                "agent_response": None,
+                "agent_metadata": {"error": "model_unavailable"},
+                "retrieved_documents": retrieved_docs,
+                "rag_used": bool(retrieved_docs),
+                "requires_human": True,
+                "final_response": (
+                    "I'm having trouble reaching our systems right now. "
+                    "I've flagged this for a human operator who will follow up shortly."
+                ),
+                "error": "model_unavailable",
             }
 
     return {
@@ -118,6 +136,6 @@ def support_agent(state: AgentState) -> AgentState:
         },
         "retrieved_documents": retrieved_docs,
         "rag_used": len(retrieved_docs) > 0,
-        "requires_human": result["requires_escalation"],
+        "requires_human": bool(result["requires_escalation"]),
         "final_response": result["response"],
     }

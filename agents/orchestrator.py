@@ -3,24 +3,34 @@ Main Orchestrator — LangGraph State Machine
 Coordinates all agents in the Multi-Agent AI System
 """
 
-import uuid
 import time
-from langgraph.graph import StateGraph, END
-from core.state import AgentState, IntentType
-from core.router import classify_intent, route_to_agent
-from core.security import security_check, sanitize_input
+import uuid
+from typing import Optional
+
+from langgraph.graph import END, StateGraph
+
+from agents.research_agent import research_agent
 from agents.sales_agent import sales_agent
 from agents.support_agent import support_agent
-from agents.research_agent import research_agent
+from core import config
+from core.logging_config import get_logger
+from core.review_queue import add_pending_case
+from core.router import classify_intent, route_to_agent
+from core.security import sanitize_input, security_check
+from core.state import AgentState
+
+logger = get_logger(__name__)
+
+SECURITY_PREFIX = "Security: "
 
 
 def security_check_node(state: AgentState) -> AgentState:
     """Security Check — rate limiting, injection detection, sanitization."""
-    raw_message = state.get("user_message", "")
+    raw_message = state.get("user_message") or ""
     clean_message = sanitize_input(raw_message)
 
     passed, reason = security_check(
-        user_id=state.get("user_id", "anonymous"),
+        user_id=state.get("user_id") or "anonymous",
         message=clean_message,
     )
 
@@ -30,7 +40,7 @@ def security_check_node(state: AgentState) -> AgentState:
             "user_message": clean_message,
             "is_valid": False,
             "is_spam": False,
-            "validation_reason": f"Security: {reason}",
+            "validation_reason": f"{SECURITY_PREFIX}{reason}",
         }
 
     return {**state, "user_message": clean_message}
@@ -39,13 +49,13 @@ def security_check_node(state: AgentState) -> AgentState:
 def validate_input(state: AgentState) -> AgentState:
     """Input validation — spam filter, basic checks"""
 
-    message = state.get("user_message", "").strip()
+    message = (state.get("user_message") or "").strip()
 
-    if not message or len(message) < 2:
+    if len(message) < 2:
         return {**state, "is_valid": False, "is_spam": False,
                 "validation_reason": "Message too short"}
 
-    if len(message) > 5000:
+    if len(message) > config.MAX_MESSAGE_LENGTH:
         return {**state, "is_valid": False, "is_spam": False,
                 "validation_reason": "Message too long"}
 
@@ -62,32 +72,35 @@ def validate_input(state: AgentState) -> AgentState:
 def reject_message(state: AgentState) -> AgentState:
     """Handle invalid/spam messages"""
 
-    reason = state.get("validation_reason", "Invalid message")
-    response = (
-        "Your message was flagged as spam. Please rephrase."
-        if state.get("is_spam")
-        else f"Invalid message: {reason}"
-    )
+    reason = state.get("validation_reason") or "Invalid message"
+
+    if state.get("is_spam"):
+        response = "Your message was flagged as spam. Please rephrase."
+    elif reason.startswith(SECURITY_PREFIX):
+        # Don't echo which rule tripped — that tells a prober how to evade it.
+        response = "Your request could not be processed. Please try again shortly."
+    else:
+        response = f"Invalid message: {reason}"
 
     return {**state, "final_response": response}
 
 
 def human_review_node(state: AgentState) -> AgentState:
     """Human-in-the-loop — low confidence cases stored for operator review."""
-    from api.routes.operator import add_pending_case
-
     try:
         add_pending_case(
-            session_id=state.get("session_id", ""),
-            user_id=state.get("user_id", ""),
-            user_message=state.get("user_message", ""),
+            session_id=state.get("session_id") or "",
+            user_id=state.get("user_id") or "",
+            user_message=state.get("user_message") or "",
             agent_response=state.get("agent_response") or "",
-            intent=str(state.get("intent", "unknown")),
-            confidence=state.get("intent_confidence", 0.0),
-            trace_id=state.get("trace_id", ""),
+            intent=str(state.get("intent") or "unknown"),
+            confidence=state.get("intent_confidence") or 0.0,
+            trace_id=state.get("trace_id") or "",
         )
     except Exception:
-        pass
+        # Never fail the user's turn because the review queue is unwritable —
+        # but do surface it, otherwise escalations vanish silently.
+        logger.exception("Failed to enqueue human review case")
 
     return {
         **state,
@@ -110,7 +123,11 @@ def should_continue(state: AgentState) -> str:
 
 def after_security(state: AgentState) -> str:
     """Conditional edge after security check."""
-    if not state.get("is_valid") and state.get("validation_reason", "").startswith("Security:"):
+    # `validation_reason` is initialised to None, so `state.get(key, "")` returns
+    # None rather than the default — the previous `.startswith` on it raised
+    # AttributeError on every single request and turned /chat into a hard 500.
+    reason = state.get("validation_reason") or ""
+    if not state.get("is_valid") and reason.startswith(SECURITY_PREFIX):
         return "reject"
     return "validate"
 
@@ -176,20 +193,29 @@ def build_graph() -> StateGraph:
 graph = build_graph()
 
 
+def _enum_value(value, fallback: str = "unknown") -> str:
+    """Render an enum/None state field as the plain string the API returns."""
+    if value is None:
+        return fallback
+    return getattr(value, "value", str(value))
+
+
 def process_message(
     user_id: str,
     message: str,
-    session_id: str = None,
+    session_id: Optional[str] = None,
     interface: str = "web",
-    conversation_history: list = None,
+    conversation_history: Optional[list] = None,
 ) -> dict:
     """Main entry point for processing user messages"""
 
     start_time = time.time()
+    resolved_session_id = session_id or str(uuid.uuid4())
+    trace_id = str(uuid.uuid4())
 
     initial_state: AgentState = {
         "user_id": user_id,
-        "session_id": session_id or str(uuid.uuid4()),
+        "session_id": resolved_session_id,
         "user_message": message,
         "interface": interface,
         "is_valid": False,
@@ -214,27 +240,47 @@ def process_message(
         "crm_actions": [],
         "final_response": "",
         "response_metadata": {},
-        "trace_id": str(uuid.uuid4()),
+        "trace_id": trace_id,
         "latency_ms": 0.0,
         "tokens_used": 0,
         "error": None,
     }
 
-    result = graph.invoke(initial_state)
+    try:
+        result = graph.invoke(initial_state)
+        error: Optional[str] = result.get("error")
+    except Exception as exc:
+        # A failure anywhere in the graph should still produce a usable turn.
+        logger.exception(
+            "Orchestration failed",
+            extra={"trace_id": trace_id, "session_id": resolved_session_id},
+        )
+        result = {
+            **initial_state,
+            "final_response": (
+                "Something went wrong while processing your request. "
+                "Please try again in a moment."
+            ),
+            "error": type(exc).__name__,
+        }
+        error = type(exc).__name__
 
     latency = (time.time() - start_time) * 1000
-    result["latency_ms"] = latency
 
+    # `assigned_agent` / `intent` stay None on the reject and error paths, and
+    # the response schema types both as `str` — returning None there failed
+    # response validation and turned a clean rejection into a 500.
     return {
-        "response": result.get("final_response", "I could not process your request."),
-        "session_id": result["session_id"],
-        "agent": result.get("assigned_agent", "unknown"),
-        "intent": result.get("intent", "unknown"),
-        "confidence": result.get("intent_confidence", 0.0),
-        "rag_used": result.get("rag_used", False),
-        "requires_human": result.get("requires_human", False),
-        "crm_actions": result.get("crm_actions", []),
+        "response": result.get("final_response") or "I could not process your request.",
+        "session_id": result.get("session_id") or resolved_session_id,
+        "agent": _enum_value(result.get("assigned_agent")),
+        "intent": _enum_value(result.get("intent")),
+        "confidence": float(result.get("intent_confidence") or 0.0),
+        "rag_used": bool(result.get("rag_used")),
+        "requires_human": bool(result.get("requires_human")),
+        "crm_actions": result.get("crm_actions") or [],
         "latency_ms": round(latency, 2),
-        "trace_id": result["trace_id"],
-        "metadata": result.get("agent_metadata", {}),
+        "trace_id": result.get("trace_id") or trace_id,
+        "metadata": result.get("agent_metadata") or {},
+        "error": error,
     }

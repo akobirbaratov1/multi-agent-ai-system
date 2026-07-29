@@ -3,16 +3,16 @@ Reporter — Weekly performance report generator.
 Combines metrics, feedback, and improvement suggestions into a readable summary.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict
 
 
 def generate_weekly_report() -> Dict:
     """Generate a full weekly performance report."""
+    from evaluation.feedback import get_feedback_stats
     from feedback_loop.analyzer import analyze_performance, get_top_issues
     from feedback_loop.improver import generate_improvement_suggestions
     from monitoring.metrics import get_summary
-    from evaluation.feedback import get_feedback_stats
 
     analysis = analyze_performance(days=7)
     metrics = get_summary()
@@ -22,7 +22,7 @@ def generate_weekly_report() -> Dict:
 
     report = {
         "report_type": "weekly",
-        "generated_at": datetime.now().isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "period": "last 7 days",
         "executive_summary": {
             "health_score": analysis["health_score"],
