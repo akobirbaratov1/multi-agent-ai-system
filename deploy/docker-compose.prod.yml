@@ -1,0 +1,45 @@
+# Production compose for a single VPS.
+#
+# Secrets are NOT defined here. They live in an operator-managed file on the
+# server (default /opt/multi-agent-ai-system/.env) that the deploy pipeline
+# never reads, writes, or logs.
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: multi-agent-ai-system:${APP_VERSION:-latest}
+    container_name: multi-agent-ai-system
+    # Bind to loopback: TLS termination and the public listener belong to the
+    # host's reverse proxy (nginx/Caddy/Traefik), not to the app container.
+    ports:
+      - "127.0.0.1:${BIND_PORT:-8000}:8000"
+    env_file:
+      - ${ENV_FILE:-/opt/multi-agent-ai-system/.env}
+    environment:
+      APP_ENV: production
+      DATA_DIR: /app/memory/data
+    volumes:
+      - agent-data:/app/memory/data
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+volumes:
+  agent-data:
+    name: multi-agent-ai-system-data

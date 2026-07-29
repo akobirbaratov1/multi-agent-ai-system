@@ -224,7 +224,7 @@ uvicorn api.main:app --reload
 ### 4. Docker
 
 ```bash
-docker-compose -f docker/docker-compose.yml up --build
+docker compose -f docker/docker-compose.yml up --build
 ```
 
 ### 5. Run Tests
@@ -279,6 +279,67 @@ curl -H "X-API-Key: $ADMIN_API_KEY" http://localhost:8000/operator/cases
 
 The operator dashboard prompts for the key and stores it in `localStorage`.
 When `ADMIN_API_KEY` is unset (local development) the guard is a no-op.
+
+---
+
+## Deployment (VPS)
+
+Deployment runs over SSH from GitHub Actions, so the server's private key stays
+in repository secrets rather than on anyone's laptop.
+
+### One-time server setup
+
+```bash
+sudo ./deploy/setup-server.sh
+```
+
+Installs Docker, creates a `deploy` user, clones the repo to
+`/opt/multi-agent-ai-system`, and writes a `.env` skeleton with mode `600`.
+No secrets are written — fill them in yourself:
+
+```bash
+sudo -u deploy nano /opt/multi-agent-ai-system/.env
+```
+
+Then put a TLS-terminating reverse proxy (nginx, Caddy, Traefik) in front of
+`127.0.0.1:8000`; the container deliberately binds to loopback only.
+
+### Repository secrets
+
+| Secret | Required | Purpose |
+|--------|:--------:|---------|
+| `DEPLOY_HOST` | yes | Server hostname or IP |
+| `DEPLOY_USER` | yes | SSH user (`deploy`) |
+| `DEPLOY_SSH_KEY` | yes | Private key for that user |
+| `DEPLOY_KNOWN_HOSTS` | recommended | `ssh-keyscan -H <host>` output — pins the host key |
+| `DEPLOY_SSH_PORT` | no | Defaults to `22` |
+| `DEPLOY_APP_DIR` | no | Defaults to `/opt/multi-agent-ai-system` |
+
+### Deploying
+
+Run the **Deploy** workflow from the Actions tab (manual by default — uncomment
+the `push` trigger in `.github/workflows/deploy.yml` for deploy-on-merge), or
+directly on the server:
+
+```bash
+sudo -u deploy /opt/multi-agent-ai-system/deploy/deploy.sh origin/main
+```
+
+`deploy.sh` is ordered so that everything which can fail happens **before** the
+running container is touched:
+
+1. **Preflight** the server's `.env` for the settings this release requires.
+   Values are never printed — only which keys are missing.
+2. **Build** the new image. The old container is still serving.
+3. **Switch** over, then poll `/health/ready`.
+4. **Roll back** to the previous commit automatically if the build fails, the
+   container won't start, or health doesn't come up within 90s.
+
+> **Upgrading from 1.0:** release 1.1 requires `ADMIN_API_KEY` and
+> `CORS_ORIGINS` in production and refuses to start without them. An `.env`
+> written for 1.0 will fail the preflight — by design. The script exits with
+> the list of missing keys while the old version keeps serving; add them and
+> re-run.
 
 ---
 
